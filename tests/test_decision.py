@@ -236,10 +236,13 @@ class UnknownDataTests(DecisionTestCase):
         self.assertFalse(result["claude"]["ok"])
         self.assertIn("schemaVersion 5", result["reason"])
 
-    def test_window_whose_reset_has_passed_is_unknown(self) -> None:
+    def test_window_whose_reset_has_passed_is_assumed_zero(self) -> None:
+        # Codex weekly reset has passed (was unknown before); it is now 0% with a note.
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, weekly_reset_days=-1))
-        self.assertFalse(result["codex"]["ok"])
-        self.assertIn("has passed", result["reason"])
+        self.assertTrue(result["codex"]["ok"])
+        self.assertEqual(result["codex"]["weekly_used"], 0.0)
+        self.assertIn("Codex weekly window reset at", result["reason"])
+        self.assertIn("assumed 0% until the next sample", result["reason"])
 
     def test_missing_syrtis_file_is_unknown(self) -> None:
         cfg_path = write_config(self.dir, self.dir / "absent.json")
@@ -1064,11 +1067,57 @@ class FreshnessRound5Tests(DecisionTestCase):
         self.assertFalse(result["codex"]["ok"])
         self.assertIn("in the future", result["reason"])
 
-    def test_passed_weekly_reset_is_unknown_even_when_fresh(self) -> None:
+    def test_passed_weekly_reset_is_assumed_zero_when_fresh(self) -> None:
         now = FIXTURE_NOW
         result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=2, weekly_reset_days=-1))
+        self.assertTrue(result["codex"]["ok"])
+        self.assertEqual(result["codex"]["weekly_used"], 0.0)
+        self.assertIn("assumed 0% until the next sample", result["reason"])
+
+
+class PassedResetTests(DecisionTestCase):
+    @staticmethod
+    def sample_of(doc, pid, wk):
+        entry = next(e for e in doc["series"] if e["providerId"] == pid and e["windowKey"] == wk)
+        return entry["samples"][0]
+
+    def test_codex_5h_reset_passed_is_prime_sol_at_zero(self) -> None:
+        # 11:36 JST case: the Codex 5h window reset after its last sample; weekly is fresh at 2%.
+        now = FIXTURE_NOW
+        doc = syrtis_doc(now, codex_weekly=2)
+        session = self.sample_of(doc, "codex", "main.session.v1")
+        session["sampledAt"] = int((now - timedelta(minutes=60)).timestamp())
+        session["resetAt"] = int((now - timedelta(minutes=24)).timestamp())
+        result = self.decide(now, fixture_payloads(now), doc=doc, tier="hard")
+        self.assertEqual(result["mode"], "PRIME")
+        self.assertEqual(result["worker"], "sol")
+        self.assertTrue(result["codex"]["ok"])
+        self.assertEqual(result["codex"]["session_used"], 0.0)
+        self.assertEqual(result["codex"]["weekly_used"], 2.0)
+        self.assertIn("Codex 5h window reset at", result["reason"])
+        self.assertIn("assumed 0% until the next sample", result["reason"])
+
+    def test_claude_session_reset_passed_is_zero_and_weekly_kept(self) -> None:
+        now = FIXTURE_NOW
+        doc = syrtis_doc(now, claude_session=40, claude_weekly=74)
+        session = self.sample_of(doc, "claude", "session.v1")
+        session["sampledAt"] = int((now - timedelta(minutes=60)).timestamp())
+        session["resetAt"] = int((now - timedelta(minutes=10)).timestamp())
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertTrue(result["claude"]["ok"])
+        self.assertTrue(result["claude"]["usable"])
+        self.assertEqual(result["claude"]["session_used"], 0.0)
+        self.assertEqual(result["claude"]["weekly_used"], 74.0)
+        self.assertIn("Claude 5h window reset at", result["reason"])
+        self.assertIn("assumed 0% until the next sample", result["reason"])
+
+    def test_passed_reset_on_stale_provider_is_still_unknown(self) -> None:
+        now = FIXTURE_NOW
+        doc = syrtis_doc(now, codex_weekly=2, weekly_reset_days=-1, age_minutes=40)
+        result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
-        self.assertIn("has passed", result["reason"])
+        self.assertIn("min old", result["reason"])
+        self.assertNotIn("assumed 0%", result["reason"])
 
 
 if __name__ == "__main__":

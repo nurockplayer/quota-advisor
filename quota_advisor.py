@@ -67,6 +67,7 @@ MAX_MINUTES = 7 * 24 * 60  # one week; bounds config values, --est and recorded 
 SESSION_SECONDS = 5 * 3600
 WEEKLY_SECONDS = 7 * 86400
 DURATION_TOLERANCE = 0.10
+ROLE_NAMES = {"session": "5h", "weekly": "weekly"}
 
 
 class ConfigError(Exception):
@@ -288,6 +289,7 @@ class Provider:
     weekly_used: Optional[float] = None
     weekly_elapsed_pct: Optional[float] = None
     sampled_at: Optional[datetime] = None
+    notes: list[str] = field(default_factory=list)
 
     def as_dict(self, usable: bool) -> dict:
         return {
@@ -375,9 +377,14 @@ def _check_window(
         return None, f"window {wk} resetAt {raw_reset!r} is missing or out of range", sampled
     if sampled - now > FUTURE_TOLERANCE:
         return None, f"window {wk} sample timestamp {iso(sampled)} is in the future (clock skew?)", sampled
-    if reset <= now:
-        return None, f"window {wk} reset at {iso(reset)} has passed; last sample predates it", sampled
+    passed_reset = reset if reset <= now else None
     try:
+        if passed_reset is not None:
+            # The window rolled over after its last sample: assume a fresh window at 0% and
+            # roll the reset forward to the first period boundary after now.
+            periods = int((now - reset).total_seconds() // duration) + 1
+            reset = reset + timedelta(seconds=duration * periods)
+            used = 0.0
         window_start = reset - timedelta(seconds=duration)
         elapsed = (now - window_start).total_seconds() / duration * 100
     except (OverflowError, ValueError):
@@ -386,6 +393,7 @@ def _check_window(
         "used": used,
         "elapsed_pct": min(max(elapsed, 0.0), 100.0),
         "sampled_at": sampled,
+        "reset_passed_at": passed_reset,
     }
     return window, None, sampled
 
@@ -432,6 +440,12 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             providers[pid] = Provider(label, False, "; ".join(problems), sampled_at=newest)
             continue
         session, weekly = results["session"][0], results["weekly"][0]
+        notes = [
+            f"{label} {ROLE_NAMES[role]} window reset at {local_fmt(window['reset_passed_at'], cfg)}; "
+            "assumed 0% until the next sample"
+            for role, (window, _, _) in results.items()
+            if window["reset_passed_at"] is not None
+        ]
         providers[pid] = Provider(
             label,
             True,
@@ -439,6 +453,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             weekly_used=weekly["used"],
             weekly_elapsed_pct=weekly["elapsed_pct"],
             sampled_at=newest,
+            notes=notes,
         )
     return providers
 
@@ -773,6 +788,7 @@ def evaluate(
     for prov in (codex, claude):
         if not prov.ok:
             notes.append(f"{prov.name} quota unknown: {prov.reason}")
+        notes.extend(prov.notes)
     for item in reset.spent:
         notes.append(f"{item.label} announcement from {local_fmt(item.at, cfg)} predates the last reset; spent")
 
