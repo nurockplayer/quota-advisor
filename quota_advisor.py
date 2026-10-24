@@ -377,14 +377,27 @@ def _check_window(
         return None, f"window {wk} resetAt {raw_reset!r} is missing or out of range", sampled
     if sampled - now > FUTURE_TOLERANCE:
         return None, f"window {wk} sample timestamp {iso(sampled)} is in the future (clock skew?)", sampled
-    passed_reset = reset if reset <= now else None
+    passed_reset = None
+    if reset <= now:
+        if sampled >= reset:
+            return None, (
+                f"window {wk} sample at {iso(sampled)} is after its reset at {iso(reset)}; inconsistent"
+            ), sampled
+        # The window rolled over after its last sample. Assume a fresh window at 0% only
+        # within the grace period and for one period; beyond that the window stays unknown.
+        if now - reset > timedelta(minutes=cfg.stale_minutes):
+            return None, (
+                f"window {wk} reset at {iso(reset)} more than {cfg.stale_minutes:g} min ago "
+                "with no new sample"
+            ), sampled
+        if now - reset >= timedelta(seconds=duration):
+            return None, (
+                f"window {wk} reset at {iso(reset)} more than one period ago with no new sample"
+            ), sampled
+        passed_reset = reset
+        reset = reset + timedelta(seconds=duration)
+        used = 0.0
     try:
-        if passed_reset is not None:
-            # The window rolled over after its last sample: assume a fresh window at 0% and
-            # roll the reset forward to the first period boundary after now.
-            periods = int((now - reset).total_seconds() // duration) + 1
-            reset = reset + timedelta(seconds=duration * periods)
-            used = 0.0
         window_start = reset - timedelta(seconds=duration)
         elapsed = (now - window_start).total_seconds() / duration * 100
     except (OverflowError, ValueError):

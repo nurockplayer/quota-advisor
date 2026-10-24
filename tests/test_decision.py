@@ -236,13 +236,6 @@ class UnknownDataTests(DecisionTestCase):
         self.assertFalse(result["claude"]["ok"])
         self.assertIn("schemaVersion 5", result["reason"])
 
-    def test_window_whose_reset_has_passed_is_assumed_zero(self) -> None:
-        # Codex weekly reset has passed (was unknown before); it is now 0% with a note.
-        result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, weekly_reset_days=-1))
-        self.assertTrue(result["codex"]["ok"])
-        self.assertEqual(result["codex"]["weekly_used"], 0.0)
-        self.assertIn("Codex weekly window reset at", result["reason"])
-        self.assertIn("assumed 0% until the next sample", result["reason"])
 
     def test_missing_syrtis_file_is_unknown(self) -> None:
         cfg_path = write_config(self.dir, self.dir / "absent.json")
@@ -1067,12 +1060,6 @@ class FreshnessRound5Tests(DecisionTestCase):
         self.assertFalse(result["codex"]["ok"])
         self.assertIn("in the future", result["reason"])
 
-    def test_passed_weekly_reset_is_assumed_zero_when_fresh(self) -> None:
-        now = FIXTURE_NOW
-        result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=2, weekly_reset_days=-1))
-        self.assertTrue(result["codex"]["ok"])
-        self.assertEqual(result["codex"]["weekly_used"], 0.0)
-        self.assertIn("assumed 0% until the next sample", result["reason"])
 
 
 class PassedResetTests(DecisionTestCase):
@@ -1118,6 +1105,80 @@ class PassedResetTests(DecisionTestCase):
         self.assertFalse(result["codex"]["ok"])
         self.assertIn("min old", result["reason"])
         self.assertNotIn("assumed 0%", result["reason"])
+
+
+class PassedResetBoundTests(DecisionTestCase):
+    """Assuming 0% after a reset is bounded: one period, within the stale grace only."""
+
+    @staticmethod
+    def sample_of(doc, pid, wk):
+        entry = next(e for e in doc["series"] if e["providerId"] == pid and e["windowKey"] == wk)
+        return entry["samples"][0]
+
+    def set_window(self, doc, pid, wk, *, sampled_ago, reset_ago, used=None):
+        sample = self.sample_of(doc, pid, wk)
+        sample["sampledAt"] = int((FIXTURE_NOW - sampled_ago).timestamp())
+        sample["resetAt"] = int((FIXTURE_NOW - reset_ago).timestamp())
+        if used is not None:
+            sample["usedPercent"] = used
+        return doc
+
+    def test_weekly_reset_passed_days_ago_is_unknown_despite_fresh_session(self) -> None:
+        now = FIXTURE_NOW
+        doc = self.set_window(
+            syrtis_doc(now, codex_weekly=2), "codex", "main.weekly.v1",
+            sampled_ago=timedelta(days=10), reset_ago=timedelta(days=8), used=92,
+        )
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertFalse(result["codex"]["ok"])
+        self.assertNotEqual(result["mode"], "PRIME")
+        self.assertIn("more than 30 min ago with no new sample", result["reason"])
+        self.assertNotIn("assumed 0%", result["reason"])
+
+    def test_reset_passed_beyond_grace_is_unknown(self) -> None:
+        now = FIXTURE_NOW
+        doc = self.set_window(
+            syrtis_doc(now, codex_weekly=2), "codex", "main.session.v1",
+            sampled_ago=timedelta(minutes=60), reset_ago=timedelta(minutes=40), used=50,
+        )
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertFalse(result["codex"]["ok"])
+        self.assertIn("more than 30 min ago with no new sample", result["reason"])
+        self.assertNotIn("assumed 0%", result["reason"])
+
+    def test_sample_recorded_after_its_reset_is_inconsistent_not_zero(self) -> None:
+        # 11:36 now, sampledAt 11:35, resetAt 11:26, usedPercent 99: must not become 0%.
+        now = FIXTURE_NOW
+        doc = self.set_window(
+            syrtis_doc(now, codex_weekly=2), "codex", "main.session.v1",
+            sampled_ago=timedelta(minutes=1), reset_ago=timedelta(minutes=10), used=99,
+        )
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertFalse(result["codex"]["ok"])
+        self.assertIn("inconsistent", result["reason"])
+        self.assertNotIn("assumed 0%", result["reason"])
+
+    def test_unsupported_zero_cases_never_enable_prime_burn_or_codex_pace(self) -> None:
+        now = FIXTURE_NOW
+        cases = {
+            "weekly reset 8 days ago": ("main.weekly.v1", timedelta(days=10), timedelta(days=8), 92),
+            "session reset 40 min ago": ("main.session.v1", timedelta(minutes=60), timedelta(minutes=40), 50),
+            "session sample after reset at 99%": ("main.session.v1", timedelta(minutes=1), timedelta(minutes=10), 99),
+        }
+        for name, (wk, sampled_ago, reset_ago, used) in cases.items():
+            with self.subTest(case=name):
+                table = announcing(now, datetime(2026, 10, 23, 18, 0, tzinfo=UTC))
+                doc = self.set_window(
+                    syrtis_doc(now, codex_weekly=2), "codex", wk,
+                    sampled_ago=sampled_ago, reset_ago=reset_ago, used=used,
+                )
+                for tier, est in (("hard", 150), ("routine", 60)):
+                    result = self.decide(now, table, doc=doc, tier=tier, est=est)
+                    self.assertFalse(result["codex"]["ok"])
+                    self.assertFalse(result["codex"]["usable"])
+                    self.assertNotIn(result["mode"], ("PRIME", "BURN"))
+                    self.assertNotEqual(result["worker"], "sol" if tier == "hard" else "luna")
+                    self.assertNotIn("assumed 0%", result["reason"])
 
 
 if __name__ == "__main__":
