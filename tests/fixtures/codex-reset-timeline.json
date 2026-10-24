@@ -1,0 +1,49 @@
+{
+  "events": [
+    {
+      "id": "2094252447271366730",
+      "date": "2026-08-31",
+      "type": "reset",
+      "summary": "25M active users: to celebrate, usage reset for every paid ChatGPT Work and Codex subscription — the reset promised for 6pm PT the previous day.",
+      "url": "https://x.com/thsottiaux/status/2094252447271366730",
+      "announced_at": "2026-08-31T02:34:27.000Z",
+      "official_window": null,
+      "announcement_state": "announced",
+      "confirmed": true,
+      "source": "archive"
+    },
+    {
+      "id": "2075641131002700120",
+      "date": "2026-07-10",
+      "type": "reset",
+      "summary": "Hello beautiful people! We have reset usage limits across Codex and ChatGPT Work. And another one will come later in the day. Rejoice. Now that I have your attention, a quick…",
+      "url": "https://x.com/thsottiaux/status/2075641131002700120",
+      "announced_at": "2026-07-10T17:59:43Z",
+      "official_window": {
+        "label": "later today",
+        "start_at": "2026-07-10T17:59:43.000Z",
+        "end_at": "2026-07-11T06:59:59.999Z",
+        "time_zone": "America/Los_Angeles"
+      },
+      "confirmed": true,
+      "source": "archive"
+    },
+    {
+      "id": "2071740419030053227",
+      "date": "2026-06-29",
+      "type": "reset",
+      "summary": "Full reset within the hour plus one additional banked reset, after usage was being consumed faster than expected.",
+      "url": "https://x.com/thsottiaux/status/2071740419030053227",
+      "announced_at": "2026-06-29T23:39:41Z",
+      "official_window": {
+        "label": "within an hour",
+        "start_at": "2026-06-29T23:39:41.000Z",
+        "end_at": "2026-06-30T00:39:41.000Z",
+        "target_kind": "deadline",
+        "target_at": "2026-06-30T00:39:41.000Z"
+      },
+      "confirmed": true,
+      "source": "archive"
+    }
+  ]
+}

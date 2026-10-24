@@ -1,0 +1,355 @@
+{
+ "schemaVersion": 4,
+ "series": [
+  {
+   "providerId": "claude",
+   "accountScope": "fixture-account",
+   "windowKey": "session.v1",
+   "activeResetAt": 1792801799,
+   "lastActivityAt": 1792792618,
+   "rollover": {
+    "state": "watching",
+    "reset_at": 1792801799,
+    "first_seen_at": 1792792618,
+    "last_seen_at": 1792792618,
+    "consecutive_count": 1
+   },
+   "samples": [
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 9.0,
+     "sampledAt": 1792790696,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 10.0,
+     "sampledAt": 1792790999,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 11.0,
+     "sampledAt": 1792791378,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 12.0,
+     "sampledAt": 1792791938,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 13.0,
+     "sampledAt": 1792792060,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792801800,
+     "durationSeconds": 18000,
+     "durationSource": "contract",
+     "usedPercent": 13.0,
+     "sampledAt": 1792792432,
+     "origin": "liveV3",
+     "plan": null
+    }
+   ]
+  },
+  {
+   "providerId": "claude",
+   "accountScope": "fixture-account",
+   "windowKey": "weekly.v1",
+   "activeResetAt": 1792904399,
+   "lastActivityAt": 1792792618,
+   "rollover": {
+    "state": "watching",
+    "reset_at": 1792904399,
+    "first_seen_at": 1792792618,
+    "last_seen_at": 1792792618,
+    "consecutive_count": 1
+   },
+   "samples": [
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 67.0,
+     "sampledAt": 1792775275,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 67.0,
+     "sampledAt": 1792778602,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 67.0,
+     "sampledAt": 1792781625,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 68.0,
+     "sampledAt": 1792785254,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 68.0,
+     "sampledAt": 1792787975,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 69.0,
+     "sampledAt": 1792791876,
+     "origin": "liveV3",
+     "plan": null
+    }
+   ]
+  },
+  {
+   "providerId": "claude",
+   "accountScope": "fixture-account",
+   "windowKey": "weekly_scoped.fable.v1",
+   "activeResetAt": 1792904400,
+   "lastActivityAt": 1792792618,
+   "rollover": {
+    "state": "watching",
+    "reset_at": 1792904400,
+    "first_seen_at": 1792425689,
+    "last_seen_at": 1792792618,
+    "consecutive_count": 2
+   },
+   "samples": [
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792775275,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792778602,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792781625,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792784952,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792787975,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792904400,
+     "durationSeconds": 604800,
+     "durationSource": "contract",
+     "usedPercent": 0.0,
+     "sampledAt": 1792791128,
+     "origin": "liveV3",
+     "plan": null
+    }
+   ]
+  },
+  {
+   "providerId": "codex",
+   "accountScope": "fixture-account",
+   "windowKey": "main.session.v1",
+   "activeResetAt": 1792809382,
+   "lastActivityAt": 1792792618,
+   "rollover": {
+    "state": "watching",
+    "reset_at": 1792809382,
+    "first_seen_at": 1792792370,
+    "last_seen_at": 1792792618,
+    "consecutive_count": 2
+   },
+   "samples": [
+    {
+     "resetAt": 1792777342,
+     "durationSeconds": 13752,
+     "durationSource": "observed",
+     "usedPercent": 100.0,
+     "sampledAt": 1792776485,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792777342,
+     "durationSeconds": 13752,
+     "durationSource": "observed",
+     "usedPercent": 100.0,
+     "sampledAt": 1792776788,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792809311,
+     "durationSeconds": 18000,
+     "durationSource": "provider",
+     "usedPercent": 0.0,
+     "sampledAt": 1792791311,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792809360,
+     "durationSeconds": 18000,
+     "durationSource": "provider",
+     "usedPercent": 12.0,
+     "sampledAt": 1792791938,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792809360,
+     "durationSeconds": 18000,
+     "durationSource": "provider",
+     "usedPercent": 12.0,
+     "sampledAt": 1792792122,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792809360,
+     "durationSeconds": 18000,
+     "durationSource": "provider",
+     "usedPercent": 12.0,
+     "sampledAt": 1792792495,
+     "origin": "liveV3",
+     "plan": null
+    }
+   ]
+  },
+  {
+   "providerId": "codex",
+   "accountScope": "fixture-account",
+   "windowKey": "main.weekly.v1",
+   "activeResetAt": 1793396182,
+   "lastActivityAt": 1792792618,
+   "rollover": {
+    "state": "watching",
+    "reset_at": 1793396182,
+    "first_seen_at": 1792792370,
+    "last_seen_at": 1792792618,
+    "consecutive_count": 2
+   },
+   "samples": [
+    {
+     "resetAt": 1792777500,
+     "durationSeconds": 88392,
+     "durationSource": "observed",
+     "usedPercent": 52.0,
+     "sampledAt": 1792758440,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792777500,
+     "durationSeconds": 88392,
+     "durationSource": "observed",
+     "usedPercent": 54.0,
+     "sampledAt": 1792764384,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792777500,
+     "durationSeconds": 88392,
+     "durationSource": "observed",
+     "usedPercent": 57.0,
+     "sampledAt": 1792765593,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792777500,
+     "durationSeconds": 88392,
+     "durationSource": "observed",
+     "usedPercent": 68.0,
+     "sampledAt": 1792770137,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1792777500,
+     "durationSeconds": 88392,
+     "durationSource": "observed",
+     "usedPercent": 68.0,
+     "sampledAt": 1792774065,
+     "origin": "liveV3",
+     "plan": null
+    },
+    {
+     "resetAt": 1793395993,
+     "durationSeconds": 604800,
+     "durationSource": "provider",
+     "usedPercent": 0.0,
+     "sampledAt": 1792791193,
+     "origin": "liveV3",
+     "plan": null
+    }
+   ]
+  }
+ ]
+}

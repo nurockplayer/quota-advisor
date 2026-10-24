@@ -1,0 +1,19 @@
+{
+  "mode": "model",
+  "updated_at": "2026-10-23T21:56:48.732Z",
+  "last_reset_at": "2026-10-23T17:40:51.000Z",
+  "probabilities": {
+    "commitment": null
+  },
+  "official_signal": null,
+  "teased_window": null,
+  "latest_alert": {
+    "id": "2113492502355562875",
+    "kind": "reset",
+    "state": "confirmed",
+    "source_at": "2026-10-23T17:40:51.000Z",
+    "summary": "Reset observed by operator; awaiting Tibo's confirmation.",
+    "url": "https://x.com/thsottiaux/status/2113492502355562875",
+    "window": null
+  }
+}
