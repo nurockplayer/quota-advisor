@@ -132,6 +132,22 @@ class TargetTests(DecisionTestCase):
                 self.assertEqual((result["mode"], result["worker"]), (mode, worker))
                 self.assertEqual(result["signals"]["daily_target"], {"day": 3, "target_pct": 54})
 
+    def test_exact_three_day_boundary_and_one_second_before(self) -> None:
+        boundary = datetime(2026, 11, 4, 2, 0, tzinfo=UTC)
+        reset_at = datetime(2026, 11, 8, 2, 0, tzinfo=UTC)
+        for seconds, day, target, mode, worker in (
+            (0, 4, 72, "TARGET", "sol"),
+            (-1, 3, 54, "SAVE", "haiku"),
+        ):
+            with self.subTest(seconds=seconds):
+                now = boundary + timedelta(seconds=seconds)
+                doc = syrtis_doc(now, codex_weekly=60)
+                weekly = next(row for row in doc["series"] if row["windowKey"] == "main.weekly.v1")
+                weekly["samples"][0]["resetAt"] = int(reset_at.timestamp())
+                result = self.decide(now, fixture_payloads(now), doc=doc, extra="daily_target_pct = 18")
+                self.assertEqual(result["signals"]["daily_target"], {"day": day, "target_pct": target})
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+
     def test_day_seven_target_is_capped_at_100(self) -> None:
         now = WED_1100_JST
         for used, mode in ((99, "TARGET"), (100, "SAVE")):

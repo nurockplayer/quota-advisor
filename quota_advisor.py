@@ -823,7 +823,7 @@ def evaluate(
     announced = reset.live[0] if reset.live else None
     daily_target = None
     if codex.weekly_elapsed_pct is not None:
-        day = min(int(codex.weekly_elapsed_pct // WEEKLY_DAY_SHARE) + 1, 7)
+        day = min(math.floor(codex.weekly_elapsed_pct * 7 / 100 + 1e-9) + 1, 7)
         target = min(cfg.daily_target_pct * day, 100.0)
         daily_target = {"day": day, "target_pct": target}
 
