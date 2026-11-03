@@ -110,7 +110,7 @@ def write_json(path: Path, doc: dict) -> Path:
 
 def write_config(directory: Path, syrtis_path: Path, extra: str = "") -> Path:
     path = directory / "config.toml"
-    path.write_text(f'syrtis_path = "{syrtis_path}"\n{extra}\n', encoding="utf-8")
+    path.write_text(f'syrtis_path = "{syrtis_path}"\naccount_state_path = "{directory / "account.json"}"\n{extra}\n', encoding="utf-8")
     return path
 
 

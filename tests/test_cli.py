@@ -75,9 +75,20 @@ class DecisionOutputTests(CliTestCase):
             self.assertIn(key, data)
         self.assertEqual(data["est_minutes"], 90)
         self.assertEqual(data["signals"]["est_source"], "--est")
-        self.assertEqual(data["mode"], "TARGET")
+        self.assertEqual(data["mode"], "CODEX")
         self.assertEqual(data["signals"]["daily_target"], {"day": 1, "target_pct": 18.0})
         self.assertNotIn("start_after", data)
+
+    def test_peak_wait_plain_json_and_log(self) -> None:
+        now = WED_1100_JST
+        cfg = write_config(self.dir, write_json(self.dir / "syrtis.json", syrtis_doc(now, codex_weekly=100)))
+        code, out, err = self.run_cli(["--tier", "hard"], now=now, cfg=cfg)
+        self.assertEqual((code, out, err), (0, "none\n", ""))
+        code, out, err = self.run_cli(["--tier", "hard", "--json"], now=now, cfg=cfg)
+        data = json.loads(out)
+        self.assertEqual((code, err, data["worker"], data["mode"]), (0, "", "none", "WAIT"))
+        self.assertIn("start_after", data)
+        self.assertEqual(self.log_records()[-1]["mode"], "WAIT")
 
     def test_decision_is_logged_with_id(self) -> None:
         code, out, _ = self.run_cli(["--tier", "hard", "--json"])
@@ -202,6 +213,7 @@ class NextPeakTests(CliTestCase):
     def test_next_peak_during_peak_reports_current_window(self) -> None:
         code, out, _ = self.run_cli(["next-peak"], now=WED_1100_JST)
         self.assertIn("now: peak until 2026-10-28T13:00+09:00", out)
+        self.assertNotIn("peak price", out)
         self.assertIn("next peak start: 2026-10-28T15:00+09:00 (Wed)", out)
 
     def test_next_peak_does_not_write_the_log(self) -> None:

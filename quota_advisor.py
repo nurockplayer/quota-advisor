@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""quota-advisor: pick the worker (sol, luna, deepseek, haiku) for the next task.
+"""quota-advisor: pick a worker (sol, luna, deepseek, haiku) or queue the task (none).
 
 Standard library only. The decision rules are in docs/brief.md and README.md.
 """
@@ -30,6 +30,7 @@ LUNARWERX_URL = "https://codex.lunarwerx.com/api/v1/stats"
 
 DEFAULT_CONFIG_PATH = "~/.config/quota-advisor/config.toml"
 DEFAULT_STATE_DIR = "~/.local/state/quota-advisor"
+DEFAULT_ACCOUNT_STATE_PATH = "~/.local/state/codex-quota-watch/account.json"
 DEFAULT_SYRTIS_PATH = (
     "~/Library/Application Support/com.nyanako.tokenbar/quota-pace-history-v3.json"
 )
@@ -60,7 +61,7 @@ NUMBER_KEYS = {
     "margin_minutes",
     "wrapup_minutes",
 }
-STRING_KEYS = {"timezone", "syrtis_path", "feed_url", "forecast_url", "lunarwerx_url"}
+STRING_KEYS = {"timezone", "syrtis_path", "account_state_path", "feed_url", "forecast_url", "lunarwerx_url"}
 PERCENT_KEYS = {"prime_threshold", "daily_target_pct", "codex_session_limit", "claude_limit"}
 MINUTE_KEYS = {"stale_minutes", "margin_minutes", "wrapup_minutes"}
 MAX_MINUTES = 7 * 24 * 60  # one week; bounds config values, --est and recorded actuals
@@ -76,9 +77,8 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Config:
-    prime_threshold: float = 35.0
     daily_target_pct: float = 18.0
-    reset_tickets: int = 0
+    peak_fallback: str = "stop"
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
     stale_minutes: float = 30.0
@@ -88,9 +88,11 @@ class Config:
     peak_windows: tuple = (("10:00", "13:00"), ("15:00", "19:00"))
     timezone: str = "Asia/Tokyo"
     syrtis_path: str = DEFAULT_SYRTIS_PATH
+    account_state_path: str = DEFAULT_ACCOUNT_STATE_PATH
     feed_url: str = FEED_URL
     forecast_url: str = FORECAST_URL
     lunarwerx_url: str = LUNARWERX_URL
+    notes: tuple[str, ...] = ()
 
 
 def _parse_hhmm(text: Any) -> str:
@@ -104,7 +106,8 @@ def _parse_hhmm(text: Any) -> str:
 
 
 def config_from_dict(data: dict) -> Config:
-    known = {f.name for f in fields(Config)}
+    deprecated = {"prime_threshold", "reset_tickets"}
+    known = {f.name for f in fields(Config)} - {"notes"} | deprecated
     unknown = sorted(set(data) - known)
     if unknown:
         raise ConfigError(f"unknown config keys: {', '.join(unknown)}")
@@ -120,10 +123,14 @@ def config_from_dict(data: dict) -> Config:
                 raise ConfigError(f"{key} is a percentage and must be at most 100")
             if key in MINUTE_KEYS and number > MAX_MINUTES:
                 raise ConfigError(f"{key} must be at most {MAX_MINUTES} (one week)")
-            values[key] = number
+            if key not in deprecated:
+                values[key] = number
         elif key == "reset_tickets":
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 20:
                 raise ConfigError("reset_tickets must be an integer from 0 to 20")
+        elif key == "peak_fallback":
+            if value not in ("stop", "haiku"):
+                raise ConfigError('peak_fallback must be "stop" or "haiku"')
             values[key] = value
         elif key in STRING_KEYS:
             if not isinstance(value, str) or not value:
@@ -160,6 +167,7 @@ def config_from_dict(data: dict) -> Config:
         ZoneInfo(values.get("timezone", Config.timezone))
     except Exception as exc:  # zoneinfo raises several exception types
         raise ConfigError(f"unknown timezone {values.get('timezone')!r}") from exc
+    values["notes"] = tuple(f"{key} is deprecated and ignored" for key in sorted(deprecated & data.keys()))
     return replace(Config(), **values)
 
 
@@ -295,6 +303,11 @@ class Provider:
     weekly_used: Optional[float] = None
     weekly_elapsed_pct: Optional[float] = None
     sampled_at: Optional[datetime] = None
+    weekly_sampled_at: Optional[datetime] = None
+    account_usable: Optional[bool] = None
+    credits_balance: Optional[float] = None
+    usable_tickets: Optional[int] = None
+    reset_times: tuple[datetime, ...] = ()
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self, usable: bool) -> dict:
@@ -357,6 +370,8 @@ def _check_window(
 ) -> tuple[Optional[dict], Optional[str], Optional[datetime]]:
     """Return (usable window or None, problem or None, sampled_at if known)."""
     if not samples:
+        if optional:
+            return None, None, None
         return None, f"window {wk} missing", None
     sampled, sample = max(samples, key=lambda pair: pair[0])
     if not _sane_time(sampled):
@@ -416,6 +431,7 @@ def _check_window(
         "elapsed_pct": min(max(elapsed, 0.0), 100.0),
         "sampled_at": sampled,
         "reset_passed_at": passed_reset,
+        "resets_at": reset,
     }
     return window, None, sampled
 
@@ -458,6 +474,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             if r[2] is not None and (r[0] is not None or r[1] is not None)
         ]
         problems = [r[1] for r in results.values() if r[1]]
+        reset_times = tuple(window["resets_at"] for window, _, _ in results.values() if window is not None)
         newest = max(sampled) if sampled else None
         if newest is None:
             problems.insert(0, f"no usable {label} sample")
@@ -465,7 +482,13 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             age_min = (now - newest).total_seconds() / 60
             problems.insert(0, f"newest {label} sample is {age_min:.0f} min old")
         if problems:
-            providers[pid] = Provider(label, False, "; ".join(problems), sampled_at=newest)
+            weekly = results["weekly"][0]
+            providers[pid] = Provider(
+                label, False, "; ".join(problems), sampled_at=newest, reset_times=reset_times,
+                weekly_used=weekly["used"] if pid == "codex" and weekly is not None else None,
+                weekly_elapsed_pct=weekly["elapsed_pct"] if pid == "codex" and weekly is not None else None,
+                weekly_sampled_at=results["weekly"][2] if pid == "codex" and weekly is not None else None,
+            )
             continue
         session, weekly = results["session"][0], results["weekly"][0]
         notes = [
@@ -475,9 +498,9 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             if window is not None and window["reset_passed_at"] is not None
         ]
         if pid == "codex" and session is None:
-            notes.append(
-                f"Codex 5h window not reported since {local_fmt(results['session'][2], cfg)}; weekly only"
-            )
+            session_sampled = results["session"][2]
+            since = f" since {local_fmt(session_sampled, cfg)}" if session_sampled is not None else ""
+            notes.append(f"Codex 5h window not reported{since}; weekly only")
         providers[pid] = Provider(
             label,
             True,
@@ -485,9 +508,57 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             weekly_used=weekly["used"],
             weekly_elapsed_pct=weekly["elapsed_pct"],
             sampled_at=newest,
+            weekly_sampled_at=results["weekly"][2],
+            reset_times=reset_times,
             notes=notes,
         )
     return providers
+
+
+def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
+    """Fresh watcher state controls usability; the fresher weekly sample controls pace."""
+    try:
+        data = json.loads(Path(cfg.account_state_path).expanduser().read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        sampled = parse_time(data.get("sampled_at")) or from_unix(data.get("sampled_at"))
+        if sampled is None:
+            raise ValueError("sampled_at missing or invalid")
+        if now - sampled > timedelta(minutes=cfg.stale_minutes):
+            raise ValueError("sampled_at is stale")
+        if sampled - now > FUTURE_TOLERANCE:
+            raise ValueError("sampled_at is in the future")
+        allowed = data.get("ordinary_usage_allowed")
+        raw_credits = data.get("credits_balance")
+        credits = _finite(raw_credits)
+        if not isinstance(allowed, bool) or (raw_credits is not None and (credits is None or credits < 0)):
+            raise ValueError("ordinary_usage_allowed or credits_balance invalid")
+        used = _finite(data.get("used_percent"))
+        resets = parse_time(data.get("resets_at")) or from_unix(data.get("resets_at"))
+        if used is None or not 0 <= used <= 100 or resets is None:
+            raise ValueError("used_percent or resets_at invalid")
+    except (OSError, ValueError) as exc:
+        if not codex.ok:
+            codex = replace(codex, weekly_used=None, weekly_elapsed_pct=None, weekly_sampled_at=None)
+        return replace(codex, notes=[*codex.notes, f"Codex account state unavailable ({exc}); using TokenBar logic"])
+
+    tickets = data.get("usable_tickets")
+    codex = replace(
+        codex, account_usable=allowed or (credits is not None and credits > 0), credits_balance=credits,
+        reset_times=(*codex.reset_times, resets),
+        usable_tickets=tickets if isinstance(tickets, int) and not isinstance(tickets, bool) and tickets >= 0 else None,
+    )
+    if codex.weekly_sampled_at is None or sampled > codex.weekly_sampled_at:
+        elapsed = (now - (resets - timedelta(seconds=WEEKLY_SECONDS))).total_seconds()
+        codex = replace(
+            codex, ok=True, reason=None, weekly_used=used,
+            weekly_elapsed_pct=max(0.0, min(100.0, elapsed / WEEKLY_SECONDS * 100)),
+            sampled_at=sampled, weekly_sampled_at=sampled,
+            notes=["Codex weekly quota from codex-quota-watch account state"],
+        )
+    if credits is None:
+        codex = replace(codex, notes=[*codex.notes, "Codex credits unknown"])
+    return codex
 
 
 # ---------------------------------------------------------------- network sources
@@ -596,8 +667,10 @@ def gather(
     fetcher: Callable[[str], dict],
 ) -> Gathered:
     cache_dir = state_dir / "cache"
+    providers = read_syrtis(Path(cfg.syrtis_path).expanduser(), now, cfg)
+    providers["codex"] = read_codex_account(providers["codex"], now, cfg)
     return Gathered(
-        providers=read_syrtis(Path(cfg.syrtis_path).expanduser(), now, cfg),
+        providers=providers,
         feed=fetch_source("feed", cfg.feed_url, "fetched_at", now, cache_dir, fetcher),
         forecast=fetch_source(
             "forecast", cfg.forecast_url, "updated_at", now, cache_dir, fetcher
@@ -805,6 +878,8 @@ def evaluate(
         codex.ok and (codex.session_used is None or codex.session_used < codex_limit)
         and codex.weekly_used < 100
     )
+    if codex.account_usable is not None:
+        codex_usable = codex.account_usable
     claude_usable = (
         claude.ok and claude.session_used < claude_limit and claude.weekly_used < claude_limit
     )
@@ -817,15 +892,7 @@ def evaluate(
     deepseek_fits = peak is None and task_end <= peak_start and wrap_up_fit
     start_after: Optional[datetime] = None
 
-    notes = list(reset.notes)
-    if cfg.reset_tickets > 0 and not codex_usable:
-        if codex.ok:
-            notes.append(
-                f"Codex at its limit with {cfg.reset_tickets} reset ticket(s) on hand: "
-                "redeem one and lower reset_tickets."
-            )
-        else:
-            notes.append("Codex quota unknown; reset_tickets not applied")
+    notes = [*cfg.notes, *reset.notes]
     for prov in (codex, claude):
         if not prov.ok:
             notes.append(f"{prov.name} quota unknown: {prov.reason}")
@@ -851,64 +918,41 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
-    elif cfg.reset_tickets > 0 and codex_usable:
-        mode, worker = "TICKET", codex_worker
+    elif daily_target is not None and codex.weekly_used is not None and codex.weekly_used > target and deepseek_fits:
+        mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
         primary = (
-            f"Reset tickets on hand ({cfg.reset_tickets}): use Codex until weekly 100%, "
-            "then redeem a ticket and lower reset_tickets."
+            f"Weekly {_pct(codex.weekly_used)} exceeds today's target {target:g}%; off-peak, "
+            f"and the task ({est_minutes} min, {est_source}) with margin ends "
+            f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
         )
-    elif cfg.daily_target_pct > 0 and codex_usable and daily_target is not None and codex.weekly_used < target:
-        mode, worker = "TARGET", codex_worker
-        primary = (
-            f"Day {day} of the Codex week: weekly {_pct(codex.weekly_used)} is under today's "
-            f"target {target:g}% ({cfg.daily_target_pct:g}% x day); {codex_state}, Codex any hour."
-        )
-    elif codex_usable and codex.weekly_used < cfg.prime_threshold:
-        mode, worker = "PRIME", codex_worker
-        primary = (
-            f"Just after a reset: Codex weekly {_pct(codex.weekly_used)} is under the prime "
-            f"threshold {cfg.prime_threshold:g}% ({codex_state})."
-        )
+    elif codex_usable:
+        mode, worker = "CODEX", codex_worker
+        primary = f"Codex usable ({codex_state}), Codex is the default any hour."
+        if daily_target is not None:
+            primary += f" Day {day} of the Codex week: target {target:g}% ({cfg.daily_target_pct:g}% x day)."
+    elif not codex.ok and codex.account_usable is None:
+        mode, worker = "CODEX", codex_worker
+        primary = "Codex quota unknown; Codex by default"
     else:
-        mode = "SAVE"
+        mode = "FALLBACK"
         prefix = ""
         if announced is not None:
-            prefix = (
-                f"Reset announced ({local_fmt(announced.at, cfg)}) but Codex is not usable "
-                f"({codex_state}). "
-            )
-        if deepseek_fits:
-            worker = "deepseek"
+            prefix = f"Reset announced ({local_fmt(announced.at, cfg)}) but Codex is not usable ({codex_state}). "
+        if claude_usable and (deepseek_fits or cfg.peak_fallback == "haiku"):
+            worker = "haiku"
             primary = (
-                f"Off-peak, and the task ({est_minutes} min, {est_source}) with margin ends "
-                f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
+                f"Codex is not usable ({codex_state}); Claude 5h "
+                f"{_pct(claude.session_used)} and weekly {_pct(claude.weekly_used)} are under "
+                f"{cfg.claude_limit:g}%."
             )
         else:
-            why = (
-                f"it is peak now until {local_fmt(peak[1], cfg)}"
-                if peak is not None
-                else f"the task would run past the peak start {local_fmt(peak_start, cfg)}"
+            mode, worker = "WAIT", "none"
+            start_after = next_off_peak(now, cfg) if peak is not None else next_off_peak(peak_start, cfg)
+            start_after = min([start_after, *(reset_at for reset_at in codex.reset_times if reset_at > now)])
+            primary = (
+                f"Codex is not usable ({codex_state}); no permitted worker is available. "
+                f"Queue the task until {local_fmt(start_after, cfg)}, then re-evaluate."
             )
-            if codex_usable:
-                worker = codex_worker
-                primary = (
-                    f"DeepSeek not usable because {why}; Codex usable ({codex_state}), "
-                    "Codex first at peak."
-                )
-            elif claude_usable:
-                worker = "haiku"
-                primary = (
-                    f"DeepSeek not usable because {why}; Codex is not usable ({codex_state}); Claude 5h "
-                    f"{_pct(claude.session_used)} and weekly {_pct(claude.weekly_used)} are under "
-                    f"{cfg.claude_limit:g}%."
-                )
-            else:
-                worker = "deepseek"
-                start_after = next_off_peak(now, cfg) if peak is not None else next_off_peak(peak_start, cfg)
-                primary = (
-                    f"DeepSeek runs at peak price because {why}, and no cheaper worker is usable "
-                    f"(pay-as-you-go beats stalling). Cheapest start: {local_fmt(start_after, cfg)}."
-                )
         primary = prefix + primary
 
     reason = primary
@@ -931,7 +975,7 @@ def evaluate(
     result.update(
         {
             "est_minutes": est_minutes,
-            "codex": codex.as_dict(codex_usable),
+            "codex": {**codex.as_dict(codex_usable), "credits_balance": codex.credits_balance, "usable_tickets": codex.usable_tickets},
             "claude": claude.as_dict(claude_usable),
             "signals": {
                 "daily_target": daily_target,
@@ -1049,7 +1093,7 @@ def resolve_est(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="quota-advisor",
-        description="Decide which worker (sol, luna, deepseek, haiku) takes the next task.",
+        description="Pick a worker (sol, luna, deepseek, haiku) or return none to queue the task.",
     )
     parser.add_argument("--tier", choices=TIERS, help="task tier (required for a decision)")
     parser.add_argument("--est", metavar="DURATION", type=parse_est, help="estimate, e.g. 90m, 2h")
@@ -1071,7 +1115,7 @@ def _cmd_next_peak(now: datetime, cfg: Config, out) -> int:
     if current is None:
         out.write(f"now: off-peak, {local_fmt(now, cfg)}\n")
     else:
-        out.write(f"now: peak until {local_fmt(current[1], cfg)} (DeepSeek at peak price)\n")
+        out.write(f"now: peak until {local_fmt(current[1], cfg)}\n")
     start, _ = next_peak(now, cfg)
     wrap_up = start - timedelta(minutes=cfg.wrapup_minutes)
     out.write(f"next peak start: {local_fmt(start, cfg)}\n")
