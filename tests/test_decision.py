@@ -257,6 +257,36 @@ class AccountStateTests(DecisionTestCase):
                 self.assertEqual(result["codex"]["usable_tickets"], 1)
                 self.assertEqual(result["signals"]["daily_target"], {"day": 1, "target_pct": 18})
 
+    def test_null_credits_preserve_ordinary_usage_authority(self) -> None:
+        now = WED_1100_JST
+        for allowed in (True, False):
+            for age in (0, 3):
+                with self.subTest(allowed=allowed, account_age=age):
+                    self.account(
+                        now, ordinary_usage_allowed=allowed, credits_balance=None,
+                        sampled_at=iso(now - timedelta(minutes=age)), usable_tickets=None,
+                        available_count=None, rate_limit_reached_type=None,
+                    )
+                    result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now))
+                    expected = ("CODEX", "sol") if allowed else ("WAIT", "none")
+                    self.assertEqual((result["mode"], result["worker"]), expected)
+                    self.assertEqual(result["codex"]["usable"], allowed)
+                    self.assertIsNone(result["codex"]["credits_balance"])
+                    self.assertIn("credits unknown", result["reason"])
+                    self.assertNotIn("using TokenBar logic", result["reason"])
+
+    def test_wait_considers_all_tokenbar_and_watcher_resets(self) -> None:
+        now = WED_1100_JST
+        for watcher_minutes, weekly_minutes, expected in ((20, 60, 5), (2, 60, 2), (20, 3, 3)):
+            with self.subTest(watcher_minutes=watcher_minutes, weekly_minutes=weekly_minutes):
+                self.account(now, credits_balance=0, resets_at=iso(now + timedelta(minutes=watcher_minutes)))
+                doc = syrtis_doc(now, codex_session=96, codex_weekly=30, weekly_reset_days=weekly_minutes / 1440)
+                session = next(row for row in doc["series"] if row["windowKey"] == "main.session.v1")
+                session["samples"][0]["resetAt"] = int((now + timedelta(minutes=5)).timestamp())
+                result = self.decide(now, fixture_payloads(now), doc=doc)
+                self.assertEqual((result["mode"], result["worker"]), ("WAIT", "none"))
+                self.assertEqual(result["start_after"], qa.iso(now + timedelta(minutes=expected)))
+
     def test_no_ordinary_usage_or_credits_uses_peak_policy(self) -> None:
         now = WED_1100_JST
         self.account(now, credits_balance=0)
@@ -381,8 +411,17 @@ class PeakFallbackTests(DecisionTestCase):
                             expected = ("FALLBACK", "haiku") if policy == "haiku" and claude < 90 else ("WAIT", "none")
                             self.assertEqual((result["mode"], result["worker"]), expected)
                             if expected[0] == "WAIT":
-                                retry_at = datetime(2026, 10, 28, 4 if now == WED_1100_JST else 10, 0, tzinfo=UTC)
+                                retry_at = now + timedelta(hours=2)  # the session reset can precede the next off-peak start
                                 self.assertEqual(result["start_after"], qa.iso(retry_at))
+
+    def test_session_limit_waits_for_earlier_five_hour_reset_without_watcher(self) -> None:
+        now = WED_1100_JST
+        doc = syrtis_doc(now, codex_session=96, codex_weekly=30)
+        session = next(row for row in doc["series"] if row["windowKey"] == "main.session.v1")
+        session["samples"][0]["resetAt"] = int((now + timedelta(minutes=5)).timestamp())
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertEqual((result["mode"], result["worker"]), ("WAIT", "none"))
+        self.assertEqual(result["start_after"], qa.iso(now + timedelta(minutes=5)))
 
     def test_known_tokenbar_reset_can_be_earlier_than_offpeak(self) -> None:
         now = WED_1100_JST
@@ -786,7 +825,7 @@ class BoundaryTests(DecisionTestCase):
         result = self.at(now, codex_weekly=70, codex_session=96, claude_session=95)
         self.assertTrue(result["signals"]["in_peak"])
         self.assertEqual(result["worker"], "none")
-        self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 26, 4, 0, tzinfo=UTC)))  # 13:00 JST
+        self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 26, 3, 0, tzinfo=UTC)))  # 12:00 JST session reset
 
     def test_monday_0959_is_off_peak_but_task_cannot_fit(self) -> None:
         now = datetime(2026, 10, 26, 0, 59, tzinfo=UTC)  # Mon 09:59 JST
@@ -829,12 +868,12 @@ class BoundaryTests(DecisionTestCase):
         self.assertEqual(result["worker"], "none")
         self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 23, 10, 0, tzinfo=UTC)))  # 19:00 JST
 
-    def test_final_branch_off_peak_overlap_start_after_is_end_of_next_peak(self) -> None:
+    def test_final_branch_off_peak_overlap_waits_for_earlier_session_reset(self) -> None:
         now = datetime(2026, 10, 28, 4, 30, tzinfo=UTC)  # Wed 13:30 JST, off-peak
         result = self.at(now, est=120, claude_session=95, codex_session=96)
         self.assertEqual(result["worker"], "none")
         self.assertFalse(result["signals"]["in_peak"])
-        self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 10, 0, tzinfo=UTC)))  # 19:00 JST
+        self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 6, 30, tzinfo=UTC)))  # 15:30 JST
 
     def test_final_branch_wednesday_peak_exact_start_after(self) -> None:
         now = datetime(2026, 10, 28, 2, 0, tzinfo=UTC)  # Wed 11:00 JST

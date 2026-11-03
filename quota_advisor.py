@@ -307,7 +307,7 @@ class Provider:
     account_usable: Optional[bool] = None
     credits_balance: Optional[float] = None
     usable_tickets: Optional[int] = None
-    resets_at: Optional[datetime] = None
+    reset_times: tuple[datetime, ...] = ()
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self, usable: bool) -> dict:
@@ -472,6 +472,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             if r[2] is not None and (r[0] is not None or r[1] is not None)
         ]
         problems = [r[1] for r in results.values() if r[1]]
+        reset_times = tuple(window["resets_at"] for window, _, _ in results.values() if window is not None)
         newest = max(sampled) if sampled else None
         if newest is None:
             problems.insert(0, f"no usable {label} sample")
@@ -479,7 +480,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             age_min = (now - newest).total_seconds() / 60
             problems.insert(0, f"newest {label} sample is {age_min:.0f} min old")
         if problems:
-            providers[pid] = Provider(label, False, "; ".join(problems), sampled_at=newest)
+            providers[pid] = Provider(label, False, "; ".join(problems), sampled_at=newest, reset_times=reset_times)
             continue
         session, weekly = results["session"][0], results["weekly"][0]
         notes = [
@@ -500,7 +501,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             weekly_elapsed_pct=weekly["elapsed_pct"],
             sampled_at=newest,
             weekly_sampled_at=results["weekly"][2],
-            resets_at=weekly["resets_at"],
+            reset_times=reset_times,
             notes=notes,
         )
     return providers
@@ -520,8 +521,9 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
         if sampled - now > FUTURE_TOLERANCE:
             raise ValueError("sampled_at is in the future")
         allowed = data.get("ordinary_usage_allowed")
-        credits = _finite(data.get("credits_balance"))
-        if not isinstance(allowed, bool) or credits is None or credits < 0:
+        raw_credits = data.get("credits_balance")
+        credits = _finite(raw_credits)
+        if not isinstance(allowed, bool) or (raw_credits is not None and (credits is None or credits < 0)):
             raise ValueError("ordinary_usage_allowed or credits_balance invalid")
         used = _finite(data.get("used_percent"))
         resets = parse_time(data.get("resets_at")) or from_unix(data.get("resets_at"))
@@ -532,7 +534,8 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
 
     tickets = data.get("usable_tickets")
     codex = replace(
-        codex, account_usable=allowed or credits > 0, credits_balance=credits, resets_at=resets,
+        codex, account_usable=allowed or (credits is not None and credits > 0), credits_balance=credits,
+        reset_times=(*codex.reset_times, resets),
         usable_tickets=tickets if isinstance(tickets, int) and not isinstance(tickets, bool) and tickets >= 0 else None,
     )
     if codex.weekly_sampled_at is None or sampled > codex.weekly_sampled_at or not codex.ok:
@@ -543,6 +546,8 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
             sampled_at=sampled, weekly_sampled_at=sampled,
             notes=["Codex weekly quota from codex-quota-watch account state"],
         )
+    if credits is None:
+        codex = replace(codex, notes=[*codex.notes, "Codex credits unknown"])
     return codex
 
 
@@ -930,8 +935,7 @@ def evaluate(
         else:
             mode, worker = "WAIT", "none"
             start_after = next_off_peak(now, cfg) if peak is not None else next_off_peak(peak_start, cfg)
-            if codex.resets_at is not None and codex.resets_at > now:
-                start_after = min(start_after, codex.resets_at)
+            start_after = min([start_after, *(reset_at for reset_at in codex.reset_times if reset_at > now)])
             primary = (
                 f"Codex is not usable ({codex_state}); no permitted worker is available. "
                 f"Queue the task until {local_fmt(start_after, cfg)}, then re-evaluate."
