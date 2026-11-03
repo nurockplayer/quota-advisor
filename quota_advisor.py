@@ -79,6 +79,7 @@ class ConfigError(Exception):
 class Config:
     prime_threshold: float = 35.0
     daily_target_pct: float = 18.0
+    reset_tickets: int = 0
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
     stale_minutes: float = 30.0
@@ -121,6 +122,10 @@ def config_from_dict(data: dict) -> Config:
             if key in MINUTE_KEYS and number > MAX_MINUTES:
                 raise ConfigError(f"{key} must be at most {MAX_MINUTES} (one week)")
             values[key] = number
+        elif key == "reset_tickets":
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 20:
+                raise ConfigError("reset_tickets must be an integer from 0 to 20")
+            values[key] = value
         elif key in STRING_KEYS:
             if not isinstance(value, str) or not value:
                 raise ConfigError(f"{key} must be a non-empty string")
@@ -800,6 +805,11 @@ def evaluate(
     start_after: Optional[datetime] = None
 
     notes = list(reset.notes)
+    if cfg.reset_tickets > 0 and not codex_usable:
+        notes.append(
+            f"Codex at its limit with {cfg.reset_tickets} reset ticket(s) on hand: "
+            "redeem one and lower reset_tickets."
+        )
     for prov in (codex, claude):
         if not prov.ok:
             notes.append(f"{prov.name} quota unknown: {prov.reason}")
@@ -825,6 +835,12 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
+    elif cfg.reset_tickets > 0 and codex_usable:
+        mode, worker = "TICKET", codex_worker
+        primary = (
+            f"Reset tickets on hand ({cfg.reset_tickets}): use Codex until weekly 100%, "
+            "then redeem a ticket and lower reset_tickets."
+        )
     elif cfg.daily_target_pct > 0 and codex_usable and daily_target is not None and codex.weekly_used < target:
         mode, worker = "TARGET", codex_worker
         primary = (

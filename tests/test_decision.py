@@ -192,6 +192,69 @@ class TargetTests(DecisionTestCase):
                 qa.config_from_dict({"daily_target_pct": value})
 
 
+class TicketTests(DecisionTestCase):
+    def test_ticket_uses_codex_on_day_two_even_off_peak(self) -> None:
+        for now in (WED_1100_JST, WED_1330_JST):
+            for tier, worker in (("hard", "sol"), ("routine", "luna")):
+                with self.subTest(now=now, tier=tier):
+                    result = self.decide(
+                        now, fixture_payloads(now), tier=tier, est=50,
+                        doc=syrtis_doc(now, codex_weekly=92, weekly_reset_days=5.6),
+                        extra="reset_tickets = 1\ndaily_target_pct = 18",
+                    )
+                    self.assertEqual((result["mode"], result["worker"]), ("TICKET", worker))
+                    self.assertEqual(result["signals"]["daily_target"]["day"], 2)
+                    self.assertIn(
+                        "Reset tickets on hand (1): use Codex until weekly 100%, "
+                        "then redeem a ticket and lower reset_tickets.", result["reason"],
+                    )
+
+    def test_codex_limits_fall_through_and_remind_owner(self) -> None:
+        now = WED_1100_JST
+        for weekly, session in ((100, 12), (92, 96)):
+            with self.subTest(weekly=weekly, session=session):
+                result = self.decide(
+                    now, fixture_payloads(now),
+                    doc=syrtis_doc(now, codex_weekly=weekly, codex_session=session),
+                    extra="reset_tickets = 1\ndaily_target_pct = 18",
+                )
+                self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
+                self.assertIn(
+                    "Codex at its limit with 1 reset ticket(s) on hand: "
+                    "redeem one and lower reset_tickets.", result["reason"],
+                )
+
+    def test_zero_tickets_preserve_existing_rules(self) -> None:
+        now = WED_1100_JST
+        for weekly in (10, 20, 92):
+            with self.subTest(weekly=weekly):
+                doc = syrtis_doc(now, codex_weekly=weekly, weekly_reset_days=6.65)
+                default = self.decide(now, fixture_payloads(now), doc=doc, extra="daily_target_pct = 18")
+                zero = self.decide(
+                    now, fixture_payloads(now), doc=doc,
+                    extra="reset_tickets = 0\ndaily_target_pct = 18",
+                )
+                self.assertEqual(zero, default)
+
+    def test_burn_still_precedes_ticket(self) -> None:
+        now = FIXTURE_NOW
+        result = self.decide(
+            now, announcing(now, datetime(2026, 10, 23, 18, 0, tzinfo=UTC)),
+            doc=syrtis_doc(now, codex_weekly=92), extra="reset_tickets = 1",
+        )
+        self.assertEqual((result["mode"], result["worker"]), ("BURN", "sol"))
+
+    def test_reset_ticket_config(self) -> None:
+        self.assertEqual(qa.Config().reset_tickets, 0)
+        self.assertEqual(qa.config_from_dict({}).reset_tickets, 0)
+        for value in (0, 1, 20):
+            with self.subTest(value=value):
+                self.assertEqual(qa.config_from_dict({"reset_tickets": value}).reset_tickets, value)
+        for value in (-1, 1.5, 21, True, "1", float("nan")):
+            with self.subTest(value=value), self.assertRaises(qa.ConfigError):
+                qa.config_from_dict({"reset_tickets": value})
+
+
 class BurnTests(DecisionTestCase):
     def test_fresh_announcement_burns_off_peak(self) -> None:
         now = FIXTURE_NOW

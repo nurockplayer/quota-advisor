@@ -24,9 +24,10 @@ Codex means `sol` for `--tier hard` and `luna` for `--tier routine`.
 Codex is usable (`codex_ok`) when, from fresh Syrtis data, the Codex 5 h window is under 95% and the weekly window is under 100%.
 
 1. **BURN**: a live announcement exists and Codex is usable. A live announcement is `forecast.official_signal` with a readable `at`, an active feed signal, or a qualifying teased window (below), that is not spent, not more than 5 minutes in the future, and not expired. An announcement is spent when any trusted reset (lunarwerx `lastResetAt`, forecast `last_reset_at`, or a confirmed reset `latest_alert`) is at or after its time. If a trusted reset time is unreadable, the ordering is uncertain and there is no BURN. An official window that ended more than 6 hours ago with no reset is expired. A `teased_window` counts as a live announcement, labelled "inferred tease (codex-reset), treated as an announcement", when its `at` is readable and not more than 5 minutes ahead, it is later than every known reset, its window starts within the next 24 hours (or already started), and its window end is not more than 6 hours in the past. Codex, any hour.
-2. **TARGET**: Codex usable and weekly used below `min(daily_target_pct × day, 100)%`, where `day` is day 1–7 of the Codex weekly window, uses Codex any hour (default 18% per day; 0 disables TARGET).
-3. **PRIME**: Codex usable and weekly used under `prime_threshold` (35). Codex, any hour.
-4. **SAVE**:
+2. **TICKET**: When `reset_tickets > 0` and Codex is usable, use Codex any hour until weekly 100%, then redeem a ticket and manually lower `reset_tickets` in `~/.config/quota-advisor/config.toml`.
+3. **TARGET**: Codex usable and weekly used below `min(daily_target_pct × day, 100)%`, where `day` is day 1–7 of the Codex weekly window, uses Codex any hour (default 18% per day; 0 disables TARGET).
+4. **PRIME**: Codex usable and weekly used under `prime_threshold` (35). Codex, any hour.
+5. **SAVE**:
    - DeepSeek when the task is off-peak and `now + est + 30 min <= next peak start`.
    - Else Codex when usable and Codex weekly is at or below the elapsed share of the weekly window plus one day (100/7 %).
    - Else Haiku when Claude 5 h and weekly are both under 90%.
@@ -46,7 +47,7 @@ Credits and affiliation: reset announcements come from [codex-reset.com](https:/
 
 ## Files
 
-- Config (optional): `~/.config/quota-advisor/config.toml`. Keys: `prime_threshold`, `daily_target_pct = 18.0` (0 disables TARGET), `codex_session_limit`, `claude_limit`, `stale_minutes`, `margin_minutes`, `wrapup_minutes`, `default_est_minutes = {hard = 150, routine = 60}`, `peak_windows = [["10:00", "13:00"], ["15:00", "19:00"]]`, `timezone`, `syrtis_path`, `feed_url`, `forecast_url`, `lunarwerx_url`. Unknown keys are an error, as are non-finite numbers, percentages above 100, minute values above 10080 (one week), and invalid UTF-8 or TOML.
+- Config (optional): `~/.config/quota-advisor/config.toml`. Keys: `prime_threshold`, `daily_target_pct = 18.0` (0 disables TARGET), `reset_tickets = 0` (integer 0–20, edited by hand), `codex_session_limit`, `claude_limit`, `stale_minutes`, `margin_minutes`, `wrapup_minutes`, `default_est_minutes = {hard = 150, routine = 60}`, `peak_windows = [["10:00", "13:00"], ["15:00", "19:00"]]`, `timezone`, `syrtis_path`, `feed_url`, `forecast_url`, `lunarwerx_url`. Unknown keys are an error, as are non-finite numbers, percentages above 100, minute values above 10080 (one week), and invalid UTF-8 or TOML.
 - State (written by decisions and `done`): `~/.local/state/quota-advisor/decisions.log`, one JSON line per decision and per `done`, plus `cache/`.
 
 ## Tests
