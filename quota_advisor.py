@@ -232,7 +232,7 @@ def iso(dt: datetime) -> str:
 
 
 def _pct(value: Optional[float]) -> str:
-    return "unknown" if value is None else f"{value:.1f}%"
+    return "n/a" if value is None else f"{value:.1f}%"
 
 
 # ---------------------------------------------------------------- peak windows
@@ -352,7 +352,8 @@ def _expected_duration(wk: str) -> Optional[float]:
 
 
 def _check_window(
-    samples: Optional[list[tuple[datetime, dict]]], wk: str, now: datetime, cfg: Config
+    samples: Optional[list[tuple[datetime, dict]]], wk: str, now: datetime, cfg: Config,
+    *, optional: bool = False,
 ) -> tuple[Optional[dict], Optional[str], Optional[datetime]]:
     """Return (usable window or None, problem or None, sampled_at if known)."""
     if not samples:
@@ -389,6 +390,8 @@ def _check_window(
             return None, (
                 f"window {wk} sample at {iso(sampled)} is after its reset at {iso(reset)}; inconsistent"
             ), sampled
+        if optional:
+            return None, None, sampled
         # The window rolled over after its last sample. Assume a fresh window at 0% only
         # within the grace period and for one period; beyond that the window stays unknown.
         if now - reset > timedelta(minutes=cfg.stale_minutes):
@@ -442,12 +445,18 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
         ("claude", "Claude", CLAUDE_WINDOWS),
     ):
         results = {
-            role: _check_window(index.get((pid, wk)), wk, now, cfg)
+            role: _check_window(
+                index.get((pid, wk)), wk, now, cfg,
+                optional=pid == "codex" and role == "session",
+            )
             for role, wk in windows.items()
         }
         # Syrtis appends a sample only when a value changes, so a quiet window can be old
         # while the provider is still polled. Freshness is judged on the newest sample.
-        sampled = [r[2] for r in results.values() if r[2] is not None]
+        sampled = [
+            r[2] for r in results.values()
+            if r[2] is not None and (r[0] is not None or r[1] is not None)
+        ]
         problems = [r[1] for r in results.values() if r[1]]
         newest = max(sampled) if sampled else None
         if newest is None:
@@ -463,12 +472,16 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             f"{label} {ROLE_NAMES[role]} window reset at {local_fmt(window['reset_passed_at'], cfg)}; "
             "assumed 0% until the next sample"
             for role, (window, _, _) in results.items()
-            if window["reset_passed_at"] is not None
+            if window is not None and window["reset_passed_at"] is not None
         ]
+        if pid == "codex" and session is None:
+            notes.append(
+                f"Codex 5h window not reported since {local_fmt(results['session'][2], cfg)}; weekly only"
+            )
         providers[pid] = Provider(
             label,
             True,
-            session_used=session["used"],
+            session_used=session["used"] if session is not None else None,
             weekly_used=weekly["used"],
             weekly_elapsed_pct=weekly["elapsed_pct"],
             sampled_at=newest,
@@ -789,7 +802,8 @@ def evaluate(
     codex_limit = min(cfg.codex_session_limit, 100.0)
     claude_limit = min(cfg.claude_limit, 100.0)
     codex_usable = (
-        codex.ok and codex.session_used < codex_limit and codex.weekly_used < 100
+        codex.ok and (codex.session_used is None or codex.session_used < codex_limit)
+        and codex.weekly_used < 100
     )
     claude_usable = (
         claude.ok and claude.session_used < claude_limit and claude.weekly_used < claude_limit
@@ -805,10 +819,13 @@ def evaluate(
 
     notes = list(reset.notes)
     if cfg.reset_tickets > 0 and not codex_usable:
-        notes.append(
-            f"Codex at its limit with {cfg.reset_tickets} reset ticket(s) on hand: "
-            "redeem one and lower reset_tickets."
-        )
+        if codex.ok:
+            notes.append(
+                f"Codex at its limit with {cfg.reset_tickets} reset ticket(s) on hand: "
+                "redeem one and lower reset_tickets."
+            )
+        else:
+            notes.append("Codex quota unknown; reset_tickets not applied")
     for prov in (codex, claude):
         if not prov.ok:
             notes.append(f"{prov.name} quota unknown: {prov.reason}")
