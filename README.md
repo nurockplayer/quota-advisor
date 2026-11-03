@@ -1,7 +1,7 @@
 # quota-advisor
 
 Answers one question before each dispatch: which worker takes this task now?
-The answer is `sol`, `luna`, `deepseek`, `haiku` or `none` (queue the task). Python 3.11+, standard library only.
+The answer is `codex`, `deepseek`, `haiku` or `none` (queue the task). Python 3.11+, standard library only.
 
 ## Usage
 
@@ -12,12 +12,12 @@ quota-advisor next-peak
 quota-advisor done <id> [--minutes N]
 ```
 
-- Plain output is the worker name only. `--json` adds `id`, `mode`, `reason`, `start_after`, `est_minutes`, `codex`, `claude`, `signals` and `data_age`.
+- Plain output is the worker name only. `--json` adds `id`, `tier`, `mode`, `reason`, `start_after`, `est_minutes`, `codex`, `claude`, `signals` and `data_age`.
 - `--est` accepts `90m`, `2h`, `1h30m`, `1.5h`, or a bare number of minutes. Without it, the median of recorded actuals for the tier is used (at least 3 records), else 150 min for hard and 60 min for routine.
 - `done <id>` records the actual duration (default: minutes since the decision) so future estimates improve.
 - `--config PATH`, `--state-dir PATH` and `--now ISO8601` (what-if checks) are global options.
 
-Codex means `sol` for `--tier hard` and `luna` for `--tier routine`.
+Both tiers use the `codex` worker; tachiko-harness chooses the model per task. Its `bin/worker-ledger` parses status lines in the format `routine  -> <worker> [<MODE>]`. Historical `sol` and `luna` decisions are read as `codex`, and their IDs remain usable with `done`.
 
 ## Rules (first match wins)
 

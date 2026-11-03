@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""quota-advisor: pick a worker (sol, luna, deepseek, haiku) or queue the task (none).
+"""quota-advisor: pick a worker (codex, deepseek, haiku) or queue the task (none).
 
 Standard library only. The decision rules are in docs/brief.md and README.md.
 """
@@ -46,7 +46,7 @@ TEASE_HORIZON = timedelta(hours=24)
 TEASE_LABEL = "inferred tease (codex-reset)"
 MIN_ACTUALS = 3
 TIERS = ("hard", "routine")
-WORKER_FOR_TIER = {"hard": "sol", "routine": "luna"}
+WORKER_FOR_TIER = {"hard": "codex", "routine": "codex"}
 PEAK_WEEKDAYS = frozenset(range(5))  # Monday..Friday
 ANNOUNCEMENT_TIME_KEYS = ("at", "announced_at", "time", "source_at", "effective_at", "start")
 
@@ -967,6 +967,7 @@ def evaluate(
     sample_times = [p.sampled_at for p in (codex, claude) if p.sampled_at is not None]
     result: dict[str, Any] = {
         "worker": worker,
+        "tier": tier,
         "mode": mode,
         "reason": reason,
     }
@@ -1046,6 +1047,8 @@ def read_log(state_dir: Path) -> tuple[list[dict], Optional[str]]:
         except ValueError:
             continue
         if isinstance(record, dict):
+            if record.get("worker") in ("sol", "luna"):
+                record["worker"] = "codex"
             records.append(record)
     return records, None
 
@@ -1093,7 +1096,7 @@ def resolve_est(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="quota-advisor",
-        description="Pick a worker (sol, luna, deepseek, haiku) or return none to queue the task.",
+        description="Pick a worker (codex, deepseek, haiku) or return none to queue the task.",
     )
     parser.add_argument("--tier", choices=TIERS, help="task tier (required for a decision)")
     parser.add_argument("--est", metavar="DURATION", type=parse_est, help="estimate, e.g. 90m, 2h")
