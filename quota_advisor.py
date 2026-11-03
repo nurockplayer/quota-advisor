@@ -536,6 +536,8 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
         if used is None or not 0 <= used <= 100 or resets is None:
             raise ValueError("used_percent or resets_at invalid")
     except (OSError, ValueError) as exc:
+        if not codex.ok:
+            codex = replace(codex, weekly_used=None, weekly_elapsed_pct=None, weekly_sampled_at=None)
         return replace(codex, notes=[*codex.notes, f"Codex account state unavailable ({exc}); using TokenBar logic"])
 
     tickets = data.get("usable_tickets")
@@ -926,6 +928,9 @@ def evaluate(
         primary = f"Codex usable ({codex_state}), Codex is the default any hour."
         if daily_target is not None:
             primary += f" Day {day} of the Codex week: target {target:g}% ({cfg.daily_target_pct:g}% x day)."
+    elif not codex.ok and codex.account_usable is None:
+        mode, worker = "CODEX", codex_worker
+        primary = "Codex quota unknown; Codex by default"
     else:
         mode = "FALLBACK"
         prefix = ""

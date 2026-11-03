@@ -197,7 +197,7 @@ class TargetTests(DecisionTestCase):
             now, fixture_payloads(now), doc=syrtis_doc(now, drop=("main.weekly.v1",)),
             extra="daily_target_pct = 18",
         )
-        self.assertEqual(result["mode"], "WAIT")
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
         self.assertIsNone(result["signals"]["daily_target"])
 
     def test_daily_target_config(self) -> None:
@@ -383,6 +383,25 @@ class AccountStateTests(DecisionTestCase):
                 self.assertIsNone(result["codex"]["credits_balance"])
                 self.assertIsNone(result["codex"]["usable_tickets"])
                 self.assertIn("using TokenBar logic", result["reason"])
+
+    def test_unknown_quota_defaults_to_codex_instead_of_using_stale_weekly_pace(self) -> None:
+        now = WED_1330_JST
+        for age, mode, worker in ((45, "CODEX", "sol"), (0, "OFFPEAK_DEEPSEEK", "deepseek")):
+            with self.subTest(age=age):
+                self.account(now, sampled_at=iso(now - timedelta(minutes=age)), used_percent=30)
+                result = self.decide(
+                    now, fixture_payloads(now), est=50,
+                    doc=syrtis_doc(now, codex_weekly=30, age_minutes=age, weekly_reset_days=6.65),
+                    extra="daily_target_pct = 18",
+                )
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+                if age:
+                    self.assertIsNone(result["codex"]["weekly_used"])
+                    self.assertIsNone(result["codex"]["weekly_elapsed_pct"])
+                    self.assertIsNone(result["signals"]["daily_target"])
+                    self.assertIn("Codex quota unknown; Codex by default", result["reason"])
+                else:
+                    self.assertEqual(result["codex"]["weekly_used"], 30)
 
     def test_stale_account_cannot_authorize_exhausted_tokenbar(self) -> None:
         now = WED_1100_JST
@@ -617,17 +636,18 @@ class UnknownDataTests(DecisionTestCase):
         self.assertFalse(result["claude"]["ok"])
         self.assertIn("45 min old", result["reason"])
         self.assertIn("Codex quota unknown", result["reason"])
-        self.assertEqual(result["worker"], "none")
-        self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 4, 0, tzinfo=UTC)))
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+        self.assertNotIn("start_after", result)
 
-    def test_stale_syrtis_off_peak_waits_without_quota(self) -> None:
+    def test_stale_syrtis_off_peak_defaults_to_codex(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, age_minutes=31))
-        self.assertEqual(result["worker"], "none")
-        self.assertNotEqual(result["mode"], "CODEX")
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+        self.assertIsNone(result["codex"]["weekly_used"])
+        self.assertIn("Codex quota unknown; Codex by default", result["reason"])
 
-    def test_stale_syrtis_cannot_prime(self) -> None:
-        result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, age_minutes=31))
-        self.assertEqual(result["mode"], "WAIT")
+    def test_stale_syrtis_defaults_to_luna_for_routine(self) -> None:
+        result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), tier="routine", doc=syrtis_doc(FIXTURE_NOW, age_minutes=31))
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "luna"))
 
     def test_missing_window_is_unknown_and_named(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, drop=("main.weekly.v1",)))
@@ -1298,7 +1318,7 @@ class ReviewRound4Tests(DecisionTestCase):
         entry = next(e for e in doc["series"] if e["providerId"] == pid and e["windowKey"] == wk)
         return entry["samples"][0]
 
-    def test_weekly_window_with_wrong_duration_is_not_codex(self) -> None:
+    def test_weekly_window_with_wrong_duration_defaults_to_codex(self) -> None:
         # Weekly 90% used over a 400-day "window": the pace allowance cannot be trusted.
         now = WED_1100_JST
         doc = syrtis_doc(now, codex_weekly=90)
@@ -1306,7 +1326,8 @@ class ReviewRound4Tests(DecisionTestCase):
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
         self.assertIn("not within 10% of 604800", result["reason"])
-        self.assertNotEqual(result["worker"], "sol")
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+        self.assertIsNone(result["signals"]["daily_target"])
 
     def test_session_duration_tolerance_is_ten_percent(self) -> None:
         now = FIXTURE_NOW
@@ -1605,7 +1626,7 @@ class PassedResetBoundTests(DecisionTestCase):
         )
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
-        self.assertNotEqual(result["mode"], "CODEX")
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
         self.assertIn("more than 30 min ago with no new sample", result["reason"])
         self.assertNotIn("assumed 0%", result["reason"])
 
@@ -1632,7 +1653,7 @@ class PassedResetBoundTests(DecisionTestCase):
         self.assertIn("inconsistent", result["reason"])
         self.assertNotIn("assumed 0%", result["reason"])
 
-    def test_unsupported_zero_cases_never_enable_prime_burn_or_codex_pace(self) -> None:
+    def test_unsupported_zero_cases_default_without_burn_or_weekly_pace(self) -> None:
         now = FIXTURE_NOW
         cases = {
             "weekly reset 8 days ago": ("main.weekly.v1", timedelta(days=10), timedelta(days=8), 92),
@@ -1649,8 +1670,11 @@ class PassedResetBoundTests(DecisionTestCase):
                     result = self.decide(now, table, doc=doc, tier=tier, est=est)
                     self.assertFalse(result["codex"]["ok"])
                     self.assertFalse(result["codex"]["usable"])
-                    self.assertNotIn(result["mode"], ("CODEX", "BURN"))
-                    self.assertNotEqual(result["worker"], "sol" if tier == "hard" else "luna")
+                    self.assertEqual(result["mode"], "CODEX")
+                    self.assertEqual(result["worker"], "sol" if tier == "hard" else "luna")
+                    self.assertIsNone(result["codex"]["weekly_used"])
+                    self.assertIsNone(result["signals"]["daily_target"])
+                    self.assertIn("Codex quota unknown; Codex by default", result["reason"])
                     self.assertNotIn("assumed 0%", result["reason"])
 
 
