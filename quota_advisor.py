@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""quota-advisor: pick the worker (sol, luna, deepseek, haiku) for the next task.
+"""quota-advisor: pick a worker (sol, luna, deepseek, haiku) or queue the task (none).
 
 Standard library only. The decision rules are in docs/brief.md and README.md.
 """
@@ -78,6 +78,7 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Config:
     daily_target_pct: float = 18.0
+    peak_fallback: str = "stop"
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
     stale_minutes: float = 30.0
@@ -127,6 +128,10 @@ def config_from_dict(data: dict) -> Config:
         elif key == "reset_tickets":
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 20:
                 raise ConfigError("reset_tickets must be an integer from 0 to 20")
+        elif key == "peak_fallback":
+            if value not in ("stop", "haiku"):
+                raise ConfigError('peak_fallback must be "stop" or "haiku"')
+            values[key] = value
         elif key in STRING_KEYS:
             if not isinstance(value, str) or not value:
                 raise ConfigError(f"{key} must be a non-empty string")
@@ -302,6 +307,7 @@ class Provider:
     account_usable: Optional[bool] = None
     credits_balance: Optional[float] = None
     usable_tickets: Optional[int] = None
+    resets_at: Optional[datetime] = None
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self, usable: bool) -> dict:
@@ -423,6 +429,7 @@ def _check_window(
         "elapsed_pct": min(max(elapsed, 0.0), 100.0),
         "sampled_at": sampled,
         "reset_passed_at": passed_reset,
+        "resets_at": reset,
     }
     return window, None, sampled
 
@@ -493,6 +500,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             weekly_elapsed_pct=weekly["elapsed_pct"],
             sampled_at=newest,
             weekly_sampled_at=results["weekly"][2],
+            resets_at=weekly["resets_at"],
             notes=notes,
         )
     return providers
@@ -524,7 +532,7 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
 
     tickets = data.get("usable_tickets")
     codex = replace(
-        codex, account_usable=allowed or credits > 0, credits_balance=credits,
+        codex, account_usable=allowed or credits > 0, credits_balance=credits, resets_at=resets,
         usable_tickets=tickets if isinstance(tickets, int) and not isinstance(tickets, bool) and tickets >= 0 else None,
     )
     if codex.weekly_sampled_at is None or sampled > codex.weekly_sampled_at or not codex.ok:
@@ -912,7 +920,7 @@ def evaluate(
         prefix = ""
         if announced is not None:
             prefix = f"Reset announced ({local_fmt(announced.at, cfg)}) but Codex is not usable ({codex_state}). "
-        if claude_usable:
+        if claude_usable and (deepseek_fits or cfg.peak_fallback == "haiku"):
             worker = "haiku"
             primary = (
                 f"Codex is not usable ({codex_state}); Claude 5h "
@@ -920,11 +928,13 @@ def evaluate(
                 f"{cfg.claude_limit:g}%."
             )
         else:
-            worker = "deepseek"
+            mode, worker = "WAIT", "none"
             start_after = next_off_peak(now, cfg) if peak is not None else next_off_peak(peak_start, cfg)
+            if codex.resets_at is not None and codex.resets_at > now:
+                start_after = min(start_after, codex.resets_at)
             primary = (
-                "DeepSeek runs at peak price because Codex and Claude are not usable "
-                f"(pay-as-you-go beats stalling). Cheapest start: {local_fmt(start_after, cfg)}."
+                f"Codex is not usable ({codex_state}); no permitted worker is available. "
+                f"Queue the task until {local_fmt(start_after, cfg)}, then re-evaluate."
             )
         primary = prefix + primary
 
@@ -1066,7 +1076,7 @@ def resolve_est(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="quota-advisor",
-        description="Decide which worker (sol, luna, deepseek, haiku) takes the next task.",
+        description="Pick a worker (sol, luna, deepseek, haiku) or return none to queue the task.",
     )
     parser.add_argument("--tier", choices=TIERS, help="task tier (required for a decision)")
     parser.add_argument("--est", metavar="DURATION", type=parse_est, help="estimate, e.g. 90m, 2h")
@@ -1088,7 +1098,7 @@ def _cmd_next_peak(now: datetime, cfg: Config, out) -> int:
     if current is None:
         out.write(f"now: off-peak, {local_fmt(now, cfg)}\n")
     else:
-        out.write(f"now: peak until {local_fmt(current[1], cfg)} (DeepSeek at peak price)\n")
+        out.write(f"now: peak until {local_fmt(current[1], cfg)}\n")
     start, _ = next_peak(now, cfg)
     wrap_up = start - timedelta(minutes=cfg.wrapup_minutes)
     out.write(f"next peak start: {local_fmt(start, cfg)}\n")
