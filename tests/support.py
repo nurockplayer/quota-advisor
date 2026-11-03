@@ -68,6 +68,7 @@ def syrtis_doc(
     claude_weekly: float = 69.0,
     age_minutes: float = 2,
     weekly_reset_days: float = 3.5,
+    codex_session_ended_days_ago: float | None = None,
     schema: int = 4,
     drop: tuple[str, ...] = (),
 ) -> dict:
@@ -93,6 +94,11 @@ def syrtis_doc(
         for pid, wk, d, u, r in rows
         if wk not in drop
     ]
+    if codex_session_ended_days_ago is not None:
+        session = next(row for row in series if row["windowKey"] == "main.session.v1")["samples"][0]
+        reset = now - timedelta(days=codex_session_ended_days_ago)
+        session["resetAt"] = int(reset.timestamp())
+        session["sampledAt"] = int((reset - timedelta(hours=1)).timestamp())
     return {"schemaVersion": schema, "series": series}
 
 

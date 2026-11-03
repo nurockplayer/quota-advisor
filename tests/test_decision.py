@@ -1260,13 +1260,81 @@ class FreshnessRound5Tests(DecisionTestCase):
 
 
 
+class CodexWeeklyOnlyTests(DecisionTestCase):
+    def test_ended_session_uses_fresh_weekly_for_ticket_target_and_peak(self) -> None:
+        now = WED_1100_JST
+        for weekly, tickets, mode in ((99, 1, "TICKET"), (20, 0, "TARGET"), (70, 0, "SAVE")):
+            with self.subTest(weekly=weekly, tickets=tickets):
+                doc = syrtis_doc(
+                    now, codex_weekly=weekly, weekly_reset_days=5.6,
+                    codex_session_ended_days_ago=2,
+                )
+                result = self.decide(
+                    now, fixture_payloads(now), doc=doc,
+                    extra=f"reset_tickets = {tickets}\ndaily_target_pct = 18",
+                )
+                self.assertTrue(result["codex"]["ok"])
+                self.assertTrue(result["codex"]["usable"])
+                self.assertIsNone(result["codex"]["session_used"])
+                self.assertEqual(result["codex"]["weekly_used"], weekly)
+                self.assertEqual((result["mode"], result["worker"]), (mode, "sol"))
+                self.assertEqual(result["signals"]["daily_target"]["day"], 2)
+                sampled = now - timedelta(days=2, hours=1)
+                self.assertIn(
+                    f"Codex 5h window not reported since {qa.local_fmt(sampled, qa.Config())}; weekly only",
+                    result["reason"],
+                )
+                self.assertEqual(qa._pct(result["codex"]["session_used"]), "n/a")
+
+    def test_weekly_only_at_limit_still_reminds_owner(self) -> None:
+        now = WED_1100_JST
+        result = self.decide(
+            now, fixture_payloads(now),
+            doc=syrtis_doc(now, codex_weekly=100, codex_session_ended_days_ago=2),
+            extra="reset_tickets = 1",
+        )
+        self.assertTrue(result["codex"]["ok"])
+        self.assertFalse(result["codex"]["usable"])
+        self.assertIn("Codex at its limit with 1 reset ticket(s)", result["reason"])
+
+    def test_stale_weekly_is_unknown_and_tickets_are_not_applied(self) -> None:
+        now = WED_1100_JST
+        for ended_days, age in ((2, 40), (1 / 1440, 2)):
+            with self.subTest(ended_days=ended_days):
+                doc = syrtis_doc(now, codex_session_ended_days_ago=ended_days, age_minutes=age)
+                weekly = next(row for row in doc["series"] if row["windowKey"] == "main.weekly.v1")
+                weekly["samples"][0]["sampledAt"] = int((now - timedelta(minutes=40)).timestamp())
+                result = self.decide(now, fixture_payloads(now), doc=doc, extra="reset_tickets = 1")
+                self.assertFalse(result["codex"]["ok"])
+                self.assertFalse(result["codex"]["usable"])
+                self.assertIn("40 min old", result["reason"])
+                self.assertIn("Codex quota unknown; reset_tickets not applied", result["reason"])
+                self.assertNotIn("redeem one", result["reason"])
+                self.assertNotIn("weekly only", result["reason"])
+
+    def test_current_session_sample_restores_session_limit(self) -> None:
+        now = WED_1100_JST
+        doc = syrtis_doc(now, codex_session=99)
+        session = next(row for row in doc["series"] if row["windowKey"] == "main.session.v1")
+        session["samples"].append({
+            **session["samples"][0],
+            "sampledAt": int((now - timedelta(days=2, hours=1)).timestamp()),
+            "resetAt": int((now - timedelta(days=2)).timestamp()),
+        })
+        result = self.decide(now, fixture_payloads(now), doc=doc)
+        self.assertTrue(result["codex"]["ok"])
+        self.assertFalse(result["codex"]["usable"])
+        self.assertEqual(result["codex"]["session_used"], 99)
+        self.assertNotIn("weekly only", result["reason"])
+
+
 class PassedResetTests(DecisionTestCase):
     @staticmethod
     def sample_of(doc, pid, wk):
         entry = next(e for e in doc["series"] if e["providerId"] == pid and e["windowKey"] == wk)
         return entry["samples"][0]
 
-    def test_codex_5h_reset_passed_is_prime_sol_at_zero(self) -> None:
+    def test_codex_5h_reset_passed_is_prime_sol_with_weekly_only(self) -> None:
         # 11:36 JST case: the Codex 5h window reset after its last sample; weekly is fresh at 2%.
         now = FIXTURE_NOW
         doc = syrtis_doc(now, codex_weekly=2)
@@ -1277,10 +1345,10 @@ class PassedResetTests(DecisionTestCase):
         self.assertEqual(result["mode"], "PRIME")
         self.assertEqual(result["worker"], "sol")
         self.assertTrue(result["codex"]["ok"])
-        self.assertEqual(result["codex"]["session_used"], 0.0)
+        self.assertIsNone(result["codex"]["session_used"])
         self.assertEqual(result["codex"]["weekly_used"], 2.0)
-        self.assertIn("Codex 5h window reset at", result["reason"])
-        self.assertIn("assumed 0% until the next sample", result["reason"])
+        self.assertIn("Codex 5h window not reported since", result["reason"])
+        self.assertIn("Codex 5h n/a, weekly 2.0%", result["reason"])
 
     def test_claude_session_reset_passed_is_zero_and_weekly_kept(self) -> None:
         now = FIXTURE_NOW
@@ -1336,11 +1404,11 @@ class PassedResetBoundTests(DecisionTestCase):
     def test_reset_passed_beyond_grace_is_unknown(self) -> None:
         now = FIXTURE_NOW
         doc = self.set_window(
-            syrtis_doc(now, codex_weekly=2), "codex", "main.session.v1",
+            syrtis_doc(now, codex_weekly=2), "claude", "session.v1",
             sampled_ago=timedelta(minutes=60), reset_ago=timedelta(minutes=40), used=50,
         )
         result = self.decide(now, fixture_payloads(now), doc=doc)
-        self.assertFalse(result["codex"]["ok"])
+        self.assertFalse(result["claude"]["ok"])
         self.assertIn("more than 30 min ago with no new sample", result["reason"])
         self.assertNotIn("assumed 0%", result["reason"])
 
@@ -1360,7 +1428,6 @@ class PassedResetBoundTests(DecisionTestCase):
         now = FIXTURE_NOW
         cases = {
             "weekly reset 8 days ago": ("main.weekly.v1", timedelta(days=10), timedelta(days=8), 92),
-            "session reset 40 min ago": ("main.session.v1", timedelta(minutes=60), timedelta(minutes=40), 50),
             "session sample after reset at 99%": ("main.session.v1", timedelta(minutes=1), timedelta(minutes=10), 99),
         }
         for name, (wk, sampled_ago, reset_ago, used) in cases.items():
