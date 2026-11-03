@@ -56,6 +56,9 @@ class DecisionTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def config_with_syrtis(self, doc: dict | None = None, extra: str = "") -> Path:
+        # Existing rule tests exercise PRIME/SAVE with TARGET explicitly disabled.
+        if "daily_target_pct" not in extra:
+            extra += "\ndaily_target_pct = 0"
         path = self.dir / "syrtis.json"
         if doc is None:
             syrtis = SYRTIS_FIXTURE
@@ -88,6 +91,105 @@ class RealFixtureTests(DecisionTestCase):
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), tier="routine", est=60)
         self.assertEqual(result["mode"], "PRIME")
         self.assertEqual(result["worker"], "luna")
+
+
+class TargetTests(DecisionTestCase):
+    def test_day_one_under_target_uses_codex_even_off_peak(self) -> None:
+        for now in (WED_1100_JST, WED_1330_JST):
+            for tier, worker in (("hard", "sol"), ("routine", "luna")):
+                with self.subTest(now=now, tier=tier):
+                    result = self.decide(
+                        now, fixture_payloads(now), tier=tier, est=50,
+                        doc=syrtis_doc(now, codex_weekly=10, weekly_reset_days=6.65),
+                        extra="daily_target_pct = 18",
+                    )
+                    self.assertEqual((result["mode"], result["worker"]), ("TARGET", worker))
+                    self.assertEqual(result["signals"]["daily_target"], {"day": 1, "target_pct": 18})
+                    self.assertIn("Day 1 of the Codex week", result["reason"])
+                    self.assertIn("target 18% (18% x day)", result["reason"])
+                    self.assertEqual(result["signals"]["deepseek_fits"], now == WED_1330_JST)
+
+    def test_day_one_target_met_falls_through_to_prime(self) -> None:
+        now = WED_1100_JST
+        for used in (18, 20):
+            with self.subTest(used=used):
+                result = self.decide(
+                    now, fixture_payloads(now),
+                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=6.65),
+                    extra="daily_target_pct = 18",
+                )
+                self.assertEqual((result["mode"], result["worker"]), ("PRIME", "sol"))
+
+    def test_day_three_target_then_original_save_path(self) -> None:
+        now = WED_1100_JST
+        for used, mode, worker in ((50, "TARGET", "sol"), (54, "SAVE", "haiku"), (60, "SAVE", "haiku")):
+            with self.subTest(used=used):
+                result = self.decide(
+                    now, fixture_payloads(now),
+                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=4.55),
+                    extra="daily_target_pct = 18",
+                )
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+                self.assertEqual(result["signals"]["daily_target"], {"day": 3, "target_pct": 54})
+
+    def test_day_seven_target_is_capped_at_100(self) -> None:
+        now = WED_1100_JST
+        for used, mode in ((99, "TARGET"), (100, "SAVE")):
+            with self.subTest(used=used):
+                result = self.decide(
+                    now, fixture_payloads(now),
+                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=0.35),
+                    extra="daily_target_pct = 18",
+                )
+                self.assertEqual(result["mode"], mode)
+                self.assertEqual(result["signals"]["daily_target"], {"day": 7, "target_pct": 100})
+
+    def test_zero_disables_target(self) -> None:
+        now = WED_1100_JST
+        for used, mode in ((10, "PRIME"), (50, "SAVE")):
+            with self.subTest(used=used):
+                result = self.decide(
+                    now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=used),
+                    extra="daily_target_pct = 0",
+                )
+                self.assertEqual(result["mode"], mode)
+
+    def test_live_announcement_still_wins(self) -> None:
+        now = FIXTURE_NOW
+        result = self.decide(
+            now, announcing(now, datetime(2026, 10, 23, 18, 0, tzinfo=UTC)),
+            doc=syrtis_doc(now, codex_weekly=10, weekly_reset_days=6.65),
+            extra="daily_target_pct = 18",
+        )
+        self.assertEqual((result["mode"], result["worker"]), ("BURN", "sol"))
+
+    def test_codex_session_limit_blocks_target(self) -> None:
+        now = WED_1100_JST
+        result = self.decide(
+            now, fixture_payloads(now),
+            doc=syrtis_doc(now, codex_weekly=10, codex_session=81),
+            extra="daily_target_pct = 18\ncodex_session_limit = 80",
+        )
+        self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
+
+    def test_unknown_weekly_window_has_no_daily_target(self) -> None:
+        now = WED_1100_JST
+        result = self.decide(
+            now, fixture_payloads(now), doc=syrtis_doc(now, drop=("main.weekly.v1",)),
+            extra="daily_target_pct = 18",
+        )
+        self.assertEqual(result["mode"], "SAVE")
+        self.assertIsNone(result["signals"]["daily_target"])
+
+    def test_daily_target_config(self) -> None:
+        self.assertEqual(qa.Config().daily_target_pct, 18.0)
+        self.assertEqual(qa.config_from_dict({}).daily_target_pct, 18.0)
+        for value in (0, 25, 100):
+            with self.subTest(value=value):
+                self.assertEqual(qa.config_from_dict({"daily_target_pct": value}).daily_target_pct, value)
+        for value in (101, -1, float("nan"), float("inf"), True, "18"):
+            with self.subTest(value=value), self.assertRaises(qa.ConfigError):
+                qa.config_from_dict({"daily_target_pct": value})
 
 
 class BurnTests(DecisionTestCase):

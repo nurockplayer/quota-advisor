@@ -54,6 +54,7 @@ DEFAULT_EST = {"hard": 150, "routine": 60}
 
 NUMBER_KEYS = {
     "prime_threshold",
+    "daily_target_pct",
     "codex_session_limit",
     "claude_limit",
     "stale_minutes",
@@ -61,7 +62,7 @@ NUMBER_KEYS = {
     "wrapup_minutes",
 }
 STRING_KEYS = {"timezone", "syrtis_path", "feed_url", "forecast_url", "lunarwerx_url"}
-PERCENT_KEYS = {"prime_threshold", "codex_session_limit", "claude_limit"}
+PERCENT_KEYS = {"prime_threshold", "daily_target_pct", "codex_session_limit", "claude_limit"}
 MINUTE_KEYS = {"stale_minutes", "margin_minutes", "wrapup_minutes"}
 MAX_MINUTES = 7 * 24 * 60  # one week; bounds config values, --est and recorded actuals
 SESSION_SECONDS = 5 * 3600
@@ -77,6 +78,7 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Config:
     prime_threshold: float = 35.0
+    daily_target_pct: float = 18.0
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
     stale_minutes: float = 30.0
@@ -809,6 +811,11 @@ def evaluate(
         f"Codex 5h {_pct(codex.session_used)}, weekly {_pct(codex.weekly_used)}"
     )
     announced = reset.live[0] if reset.live else None
+    daily_target = None
+    if codex.weekly_elapsed_pct is not None:
+        day = min(int(codex.weekly_elapsed_pct // WEEKLY_DAY_SHARE) + 1, 7)
+        target = min(cfg.daily_target_pct * day, 100.0)
+        daily_target = {"day": day, "target_pct": target}
 
     if announced is not None and codex_usable:
         mode, worker = "BURN", codex_worker
@@ -818,6 +825,12 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
+    elif cfg.daily_target_pct > 0 and codex_usable and daily_target is not None and codex.weekly_used < target:
+        mode, worker = "TARGET", codex_worker
+        primary = (
+            f"Day {day} of the Codex week: weekly {_pct(codex.weekly_used)} is under today's "
+            f"target {target:g}% ({cfg.daily_target_pct:g}% x day); {codex_state}, Codex any hour."
+        )
     elif codex_usable and codex.weekly_used < cfg.prime_threshold:
         mode, worker = "PRIME", codex_worker
         primary = (
@@ -896,6 +909,7 @@ def evaluate(
             "codex": codex.as_dict(codex_usable),
             "claude": claude.as_dict(claude_usable),
             "signals": {
+                "daily_target": daily_target,
                 "announced": announced is not None,
                 "announcement_at": iso(announced.at) if announced else None,
                 "announcement_source": announced.label if announced else None,
