@@ -480,7 +480,13 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             age_min = (now - newest).total_seconds() / 60
             problems.insert(0, f"newest {label} sample is {age_min:.0f} min old")
         if problems:
-            providers[pid] = Provider(label, False, "; ".join(problems), sampled_at=newest, reset_times=reset_times)
+            weekly = results["weekly"][0]
+            providers[pid] = Provider(
+                label, False, "; ".join(problems), sampled_at=newest, reset_times=reset_times,
+                weekly_used=weekly["used"] if pid == "codex" and weekly is not None else None,
+                weekly_elapsed_pct=weekly["elapsed_pct"] if pid == "codex" and weekly is not None else None,
+                weekly_sampled_at=results["weekly"][2] if pid == "codex" and weekly is not None else None,
+            )
             continue
         session, weekly = results["session"][0], results["weekly"][0]
         notes = [
@@ -538,7 +544,7 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
         reset_times=(*codex.reset_times, resets),
         usable_tickets=tickets if isinstance(tickets, int) and not isinstance(tickets, bool) and tickets >= 0 else None,
     )
-    if codex.weekly_sampled_at is None or sampled > codex.weekly_sampled_at or not codex.ok:
+    if codex.weekly_sampled_at is None or sampled > codex.weekly_sampled_at:
         elapsed = (now - (resets - timedelta(seconds=WEEKLY_SECONDS))).total_seconds()
         codex = replace(
             codex, ok=True, reason=None, weekly_used=used,

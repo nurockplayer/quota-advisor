@@ -341,6 +341,33 @@ class AccountStateTests(DecisionTestCase):
                 self.assertEqual(result["codex"]["weekly_used"], expected)
                 self.assertEqual(result["worker"], "deepseek" if expected == 30 else "sol")
 
+    def test_weekly_source_freshness_is_independent_of_missing_session(self) -> None:
+        now = WED_1330_JST
+        for account_age, expected_used, mode, worker in (
+            (3, 19, "OFFPEAK_DEEPSEEK", "deepseek"),
+            (0, 17, "CODEX", "sol"),
+        ):
+            with self.subTest(account_age=account_age):
+                self.account(
+                    now, sampled_at=iso(now - timedelta(minutes=account_age)),
+                    used_percent=17, ordinary_usage_allowed=True, credits_balance=0,
+                )
+                doc = syrtis_doc(
+                    now, codex_weekly=19, age_minutes=1, weekly_reset_days=6.65,
+                    drop=("main.session.v1",),
+                )
+                cfg_path = self.config_with_syrtis(doc, "daily_target_pct = 18")
+                cfg = qa.load_config(cfg_path, required=True)
+                tokenbar = qa.read_syrtis(Path(cfg.syrtis_path), now, cfg)["codex"]
+                self.assertEqual(tokenbar.weekly_used, 19)
+                self.assertEqual(tokenbar.weekly_sampled_at, now - timedelta(minutes=1))
+                result = evaluate_now(now, cfg_path, self.state, fetcher_for(fixture_payloads(now)), est=50)
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+                self.assertEqual(result["codex"]["weekly_used"], expected_used)
+                self.assertTrue(result["codex"]["usable"])
+                self.assertEqual(result["signals"]["daily_target"], {"day": 1, "target_pct": 18})
+                self.assertEqual(result["codex"]["sampled_at"], qa.iso(now - timedelta(minutes=min(account_age, 1))))
+
     def test_missing_stale_and_unreadable_account_use_tokenbar(self) -> None:
         now = WED_1100_JST
         for state in ("missing", "stale", "unreadable", "invalid_utf8"):
