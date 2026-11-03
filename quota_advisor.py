@@ -43,7 +43,6 @@ FUTURE_TOLERANCE = timedelta(minutes=5)  # timestamps further ahead than this ar
 WINDOW_EXPIRY_GRACE = timedelta(hours=6)
 TEASE_HORIZON = timedelta(hours=24)
 TEASE_LABEL = "inferred tease (codex-reset)"
-WEEKLY_DAY_SHARE = 100 / 7
 MIN_ACTUALS = 3
 TIERS = ("hard", "routine")
 WORKER_FOR_TIER = {"hard": "sol", "routine": "luna"}
@@ -873,23 +872,16 @@ def evaluate(
                 if peak is not None
                 else f"the task would run past the peak start {local_fmt(peak_start, cfg)}"
             )
-            allowance = f"elapsed {codex.weekly_elapsed_pct:.0f}% + {WEEKLY_DAY_SHARE:.1f}% allowance" if codex.ok else ""
-            if codex_usable and codex.weekly_used <= codex.weekly_elapsed_pct + WEEKLY_DAY_SHARE:
+            if codex_usable:
                 worker = codex_worker
                 primary = (
-                    f"DeepSeek not usable because {why}; Codex weekly {_pct(codex.weekly_used)} "
-                    f"is on pace ({allowance})."
+                    f"DeepSeek not usable because {why}; Codex usable ({codex_state}), "
+                    "Codex first at peak."
                 )
             elif claude_usable:
                 worker = "haiku"
-                if codex_usable:
-                    codex_part = (
-                        f"Codex weekly {_pct(codex.weekly_used)} is ahead of pace ({allowance})"
-                    )
-                else:
-                    codex_part = f"Codex is not usable ({codex_state})"
                 primary = (
-                    f"DeepSeek not usable because {why}; {codex_part}; Claude 5h "
+                    f"DeepSeek not usable because {why}; Codex is not usable ({codex_state}); Claude 5h "
                     f"{_pct(claude.session_used)} and weekly {_pct(claude.weekly_used)} are under "
                     f"{cfg.claude_limit:g}%."
                 )

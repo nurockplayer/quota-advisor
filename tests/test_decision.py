@@ -122,7 +122,7 @@ class TargetTests(DecisionTestCase):
 
     def test_day_three_target_then_original_save_path(self) -> None:
         now = WED_1100_JST
-        for used, mode, worker in ((50, "TARGET", "sol"), (54, "SAVE", "haiku"), (60, "SAVE", "haiku")):
+        for used, mode, worker in ((50, "TARGET", "sol"), (54, "SAVE", "sol"), (60, "SAVE", "sol")):
             with self.subTest(used=used):
                 result = self.decide(
                     now, fixture_payloads(now),
@@ -137,7 +137,7 @@ class TargetTests(DecisionTestCase):
         reset_at = datetime(2026, 11, 8, 2, 0, tzinfo=UTC)
         for seconds, day, target, mode, worker in (
             (0, 4, 72, "TARGET", "sol"),
-            (-1, 3, 54, "SAVE", "haiku"),
+            (-1, 3, 54, "SAVE", "sol"),
         ):
             with self.subTest(seconds=seconds):
                 now = boundary + timedelta(seconds=seconds)
@@ -348,10 +348,11 @@ class SaveTests(DecisionTestCase):
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), tier="routine", est=120, doc=syrtis_doc(WED_1330_JST, codex_weekly=40))
         self.assertEqual(result["worker"], "luna")
 
-    def test_task_running_into_peak_uses_haiku_when_codex_ahead(self) -> None:
-        # Weekly 70% against 50% elapsed + 14.3% allowance: ahead of pace.
+    def test_task_running_into_peak_uses_codex_even_when_ahead(self) -> None:
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=120, doc=syrtis_doc(WED_1330_JST, codex_weekly=70))
-        self.assertEqual(result["worker"], "haiku")
+        self.assertEqual((result["mode"], result["worker"]), ("SAVE", "sol"))
+        self.assertFalse(result["signals"]["deepseek_fits"])
+        self.assertIn("Codex first at peak.", result["reason"])
 
     def test_peak_with_codex_on_pace_goes_to_codex(self) -> None:
         result = self.decide(WED_1100_JST, fixture_payloads(WED_1100_JST), doc=syrtis_doc(WED_1100_JST, codex_weekly=40))
@@ -359,12 +360,28 @@ class SaveTests(DecisionTestCase):
         self.assertEqual(result["worker"], "sol")
         self.assertTrue(result["signals"]["in_peak"])
 
-    def test_peak_with_codex_ahead_goes_to_haiku(self) -> None:
-        result = self.decide(WED_1100_JST, fixture_payloads(WED_1100_JST), doc=syrtis_doc(WED_1100_JST, codex_weekly=70))
-        self.assertEqual(result["worker"], "haiku")
+    def test_peak_with_codex_ahead_goes_to_codex(self) -> None:
+        for tier, worker in (("hard", "sol"), ("routine", "luna")):
+            with self.subTest(tier=tier):
+                result = self.decide(
+                    WED_1100_JST, fixture_payloads(WED_1100_JST), tier=tier,
+                    doc=syrtis_doc(WED_1100_JST, codex_weekly=70),
+                )
+                self.assertEqual((result["mode"], result["worker"]), ("SAVE", worker))
+                self.assertIn("Codex first at peak.", result["reason"])
+
+    def test_peak_with_codex_unusable_goes_to_haiku(self) -> None:
+        for weekly, session in ((100, 12), (70, 96)):
+            with self.subTest(weekly=weekly, session=session):
+                result = self.decide(
+                    WED_1100_JST, fixture_payloads(WED_1100_JST),
+                    doc=syrtis_doc(WED_1100_JST, codex_weekly=weekly, codex_session=session),
+                )
+                self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
+                self.assertIn("Codex is not usable", result["reason"])
 
     def test_peak_with_claude_also_over_90_goes_to_deepseek_with_start_after(self) -> None:
-        doc = syrtis_doc(WED_1100_JST, codex_weekly=70, claude_session=95)
+        doc = syrtis_doc(WED_1100_JST, codex_weekly=70, codex_session=96, claude_session=95)
         result = self.decide(WED_1100_JST, fixture_payloads(WED_1100_JST), doc=doc)
         self.assertEqual(result["worker"], "deepseek")
         self.assertIn("peak price", result["reason"])
@@ -624,7 +641,7 @@ class BoundaryTests(DecisionTestCase):
 
     def test_monday_1000_is_peak_start(self) -> None:
         now = datetime(2026, 10, 26, 1, 0, tzinfo=UTC)  # Mon 10:00 JST
-        result = self.at(now, codex_weekly=70, claude_session=95)
+        result = self.at(now, codex_weekly=70, codex_session=96, claude_session=95)
         self.assertTrue(result["signals"]["in_peak"])
         self.assertEqual(result["worker"], "deepseek")
         self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 26, 4, 0, tzinfo=UTC)))  # 13:00 JST
@@ -679,7 +696,7 @@ class BoundaryTests(DecisionTestCase):
 
     def test_final_branch_wednesday_peak_exact_start_after(self) -> None:
         now = datetime(2026, 10, 28, 2, 0, tzinfo=UTC)  # Wed 11:00 JST
-        result = self.at(now, codex_weekly=70, claude_session=95)
+        result = self.at(now, codex_weekly=70, codex_session=96, claude_session=95)
         self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 4, 0, tzinfo=UTC)))  # 13:00 JST
 
 

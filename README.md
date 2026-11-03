@@ -29,7 +29,7 @@ Codex is usable (`codex_ok`) when, from fresh Syrtis data, the Codex 5 h window 
 4. **PRIME**: Codex usable and weekly used under `prime_threshold` (35). Codex, any hour.
 5. **SAVE**:
    - DeepSeek when the task is off-peak and `now + est + 30 min <= next peak start`.
-   - Else Codex when usable and Codex weekly is at or below the elapsed share of the weekly window plus one day (100/7 %).
+   - Else Codex whenever usable, even ahead of pace, because Codex comes first at peak or when the task would run into it.
    - Else Haiku when Claude 5 h and weekly are both under 90%.
    - Else DeepSeek at peak price, with `start_after` set to the next off-peak start.
 
