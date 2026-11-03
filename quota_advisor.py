@@ -370,6 +370,8 @@ def _check_window(
 ) -> tuple[Optional[dict], Optional[str], Optional[datetime]]:
     """Return (usable window or None, problem or None, sampled_at if known)."""
     if not samples:
+        if optional:
+            return None, None, None
         return None, f"window {wk} missing", None
     sampled, sample = max(samples, key=lambda pair: pair[0])
     if not _sane_time(sampled):
@@ -496,9 +498,9 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             if window is not None and window["reset_passed_at"] is not None
         ]
         if pid == "codex" and session is None:
-            notes.append(
-                f"Codex 5h window not reported since {local_fmt(results['session'][2], cfg)}; weekly only"
-            )
+            session_sampled = results["session"][2]
+            since = f" since {local_fmt(session_sampled, cfg)}" if session_sampled is not None else ""
+            notes.append(f"Codex 5h window not reported{since}; weekly only")
         providers[pid] = Provider(
             label,
             True,

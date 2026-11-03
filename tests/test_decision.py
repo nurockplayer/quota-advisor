@@ -1246,14 +1246,14 @@ class ReviewRound3Tests(DecisionTestCase):
 
     def test_non_string_provider_id_is_skipped_not_a_crash(self) -> None:
         now = FIXTURE_NOW
-        doc = self.mutated_doc(now, lambda d: d["series"][0].__setitem__("providerId", []))
+        doc = self.mutated_doc(now, lambda d: d["series"][1].__setitem__("providerId", []))
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
         self.assertIn("missing", result["reason"])
 
     def test_non_list_samples_is_skipped_not_a_crash(self) -> None:
         now = FIXTURE_NOW
-        doc = self.mutated_doc(now, lambda d: d["series"][0].__setitem__("samples", "x"))
+        doc = self.mutated_doc(now, lambda d: d["series"][1].__setitem__("samples", "x"))
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
 
@@ -1269,7 +1269,7 @@ class ReviewRound3Tests(DecisionTestCase):
 
     def test_huge_sample_time_is_unknown_not_a_crash(self) -> None:
         now = FIXTURE_NOW
-        doc = self.mutated_doc(now, lambda d: self.sample_of(d, "codex", "main.session.v1").__setitem__("sampledAt", 1e300))
+        doc = self.mutated_doc(now, lambda d: self.sample_of(d, "codex", "main.weekly.v1").__setitem__("sampledAt", 1e300))
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
 
@@ -1356,10 +1356,10 @@ class ReviewRound4Tests(DecisionTestCase):
             with self.subTest(field=field):
                 self.state = self.dir / f"big-{field}"
                 doc = syrtis_doc(now, codex_weekly=40)
-                self.sample_of(doc, "codex", "main.session.v1")[field] = huge
+                self.sample_of(doc, "codex", "main.weekly.v1")[field] = huge
                 result = self.decide(now, fixture_payloads(now), doc=doc)
                 self.assertFalse(result["codex"]["ok"])
-                self.assertIn("main.session.v1", result["reason"])
+                self.assertIn("main.weekly.v1", result["reason"])
                 self.assertTrue(result["claude"]["ok"])
 
     def test_malformed_log_records_are_ignored(self) -> None:
@@ -1490,6 +1490,20 @@ class FreshnessRound5Tests(DecisionTestCase):
 
 
 class CodexWeeklyOnlyTests(DecisionTestCase):
+    def test_absent_session_without_account_uses_weekly_at_peak(self) -> None:
+        now = WED_1100_JST
+        for weekly, mode, worker in ((100, "WAIT", "none"), (20, "CODEX", "sol")):
+            with self.subTest(weekly=weekly):
+                doc = syrtis_doc(now, codex_weekly=weekly, drop=("main.session.v1",))
+                cfg_path = write_config(self.dir, write_json(self.dir / "syrtis.json", doc))
+                self.assertFalse((self.dir / "account.json").exists())
+                result = evaluate_now(now, cfg_path, self.state, fetcher_for(fixture_payloads(now)))
+                self.assertTrue(result["codex"]["ok"])
+                self.assertEqual(result["codex"]["usable"], weekly < 100)
+                self.assertIsNone(result["codex"]["session_used"])
+                self.assertEqual(result["codex"]["weekly_used"], weekly)
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+
     def test_ended_session_uses_fresh_weekly_for_ticket_target_and_peak(self) -> None:
         now = WED_1100_JST
         for weekly, tickets, mode in ((99, 1, "CODEX"), (20, 0, "CODEX"), (70, 0, "CODEX")):
