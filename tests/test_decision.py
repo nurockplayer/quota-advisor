@@ -56,9 +56,9 @@ class DecisionTestCase(unittest.TestCase):
         self._tmp.cleanup()
 
     def config_with_syrtis(self, doc: dict | None = None, extra: str = "") -> Path:
-        # Existing rule tests exercise PRIME/SAVE with TARGET explicitly disabled.
+        # A small target lets the fit/boundary tests exercise off-peak routing.
         if "daily_target_pct" not in extra:
-            extra += "\ndaily_target_pct = 0"
+            extra += "\ndaily_target_pct = 5"
         path = self.dir / "syrtis.json"
         if doc is None:
             syrtis = SYRTIS_FIXTURE
@@ -82,14 +82,14 @@ class RealFixtureTests(DecisionTestCase):
 
     def test_codex_weekly_zero_is_prime_sol(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), tier="hard")
-        self.assertEqual(result["mode"], "PRIME")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "sol")
         self.assertEqual(result["codex"]["weekly_used"], 0.0)
         self.assertEqual(result["signals"]["last_reset_source"], "lunarwerx")
 
     def test_codex_weekly_zero_is_prime_luna_for_routine(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), tier="routine", est=60)
-        self.assertEqual(result["mode"], "PRIME")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "luna")
 
 
@@ -103,7 +103,7 @@ class TargetTests(DecisionTestCase):
                         doc=syrtis_doc(now, codex_weekly=10, weekly_reset_days=6.65),
                         extra="daily_target_pct = 18",
                     )
-                    self.assertEqual((result["mode"], result["worker"]), ("TARGET", worker))
+                    self.assertEqual((result["mode"], result["worker"]), ("CODEX", worker))
                     self.assertEqual(result["signals"]["daily_target"], {"day": 1, "target_pct": 18})
                     self.assertIn("Day 1 of the Codex week", result["reason"])
                     self.assertIn("target 18% (18% x day)", result["reason"])
@@ -118,11 +118,11 @@ class TargetTests(DecisionTestCase):
                     doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=6.65),
                     extra="daily_target_pct = 18",
                 )
-                self.assertEqual((result["mode"], result["worker"]), ("PRIME", "sol"))
+                self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
 
     def test_day_three_target_then_original_save_path(self) -> None:
         now = WED_1100_JST
-        for used, mode, worker in ((50, "TARGET", "sol"), (54, "SAVE", "sol"), (60, "SAVE", "sol")):
+        for used, mode, worker in ((50, "CODEX", "sol"), (54, "CODEX", "sol"), (60, "CODEX", "sol")):
             with self.subTest(used=used):
                 result = self.decide(
                     now, fixture_payloads(now),
@@ -136,8 +136,8 @@ class TargetTests(DecisionTestCase):
         boundary = datetime(2026, 11, 4, 2, 0, tzinfo=UTC)
         reset_at = datetime(2026, 11, 8, 2, 0, tzinfo=UTC)
         for seconds, day, target, mode, worker in (
-            (0, 4, 72, "TARGET", "sol"),
-            (-1, 3, 54, "SAVE", "sol"),
+            (0, 4, 72, "CODEX", "sol"),
+            (-1, 3, 54, "CODEX", "sol"),
         ):
             with self.subTest(seconds=seconds):
                 now = boundary + timedelta(seconds=seconds)
@@ -150,7 +150,7 @@ class TargetTests(DecisionTestCase):
 
     def test_day_seven_target_is_capped_at_100(self) -> None:
         now = WED_1100_JST
-        for used, mode in ((99, "TARGET"), (100, "SAVE")):
+        for used, mode in ((99, "CODEX"), (100, "FALLBACK")):
             with self.subTest(used=used):
                 result = self.decide(
                     now, fixture_payloads(now),
@@ -162,7 +162,7 @@ class TargetTests(DecisionTestCase):
 
     def test_zero_disables_target(self) -> None:
         now = WED_1100_JST
-        for used, mode in ((10, "PRIME"), (50, "SAVE")):
+        for used, mode in ((10, "CODEX"), (50, "CODEX")):
             with self.subTest(used=used):
                 result = self.decide(
                     now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=used),
@@ -186,7 +186,7 @@ class TargetTests(DecisionTestCase):
             doc=syrtis_doc(now, codex_weekly=10, codex_session=81),
             extra="daily_target_pct = 18\ncodex_session_limit = 80",
         )
-        self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
+        self.assertEqual((result["mode"], result["worker"]), ("FALLBACK", "haiku"))
 
     def test_unknown_weekly_window_has_no_daily_target(self) -> None:
         now = WED_1100_JST
@@ -194,7 +194,7 @@ class TargetTests(DecisionTestCase):
             now, fixture_payloads(now), doc=syrtis_doc(now, drop=("main.weekly.v1",)),
             extra="daily_target_pct = 18",
         )
-        self.assertEqual(result["mode"], "SAVE")
+        self.assertEqual(result["mode"], "FALLBACK")
         self.assertIsNone(result["signals"]["daily_target"])
 
     def test_daily_target_config(self) -> None:
@@ -208,67 +208,156 @@ class TargetTests(DecisionTestCase):
                 qa.config_from_dict({"daily_target_pct": value})
 
 
-class TicketTests(DecisionTestCase):
-    def test_ticket_uses_codex_on_day_two_even_off_peak(self) -> None:
-        for now in (WED_1100_JST, WED_1330_JST):
-            for tier, worker in (("hard", "sol"), ("routine", "luna")):
-                with self.subTest(now=now, tier=tier):
-                    result = self.decide(
-                        now, fixture_payloads(now), tier=tier, est=50,
-                        doc=syrtis_doc(now, codex_weekly=92, weekly_reset_days=5.6),
-                        extra="reset_tickets = 1\ndaily_target_pct = 18",
-                    )
-                    self.assertEqual((result["mode"], result["worker"]), ("TICKET", worker))
-                    self.assertEqual(result["signals"]["daily_target"]["day"], 2)
-                    self.assertIn(
-                        "Reset tickets on hand (1): use Codex until weekly 100%, "
-                        "then redeem a ticket and lower reset_tickets.", result["reason"],
-                    )
+class CodexDefaultTests(DecisionTestCase):
+    def test_over_target_diverts_only_when_off_peak_and_task_fits(self) -> None:
+        for now, est, used, mode in (
+            (WED_1330_JST, 50, 30, "OFFPEAK_DEEPSEEK"),
+            (WED_1100_JST, 50, 30, "CODEX"),
+            (WED_1330_JST, 61, 30, "CODEX"),
+            (WED_1330_JST, 50, 18, "CODEX"),
+        ):
+            with self.subTest(now=now, est=est, used=used):
+                result = self.decide(
+                    now, fixture_payloads(now), est=est,
+                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=6.65),
+                    extra="daily_target_pct = 18",
+                )
+                self.assertEqual(result["mode"], mode)
+                self.assertEqual(result["worker"], "deepseek" if mode == "OFFPEAK_DEEPSEEK" else "sol")
 
-    def test_codex_limits_fall_through_and_remind_owner(self) -> None:
+
+class AccountStateTests(DecisionTestCase):
+    def account(self, now, **overrides):
+        data = {
+            "sampled_at": iso(now), "used_percent": 100,
+            "resets_at": iso(now + timedelta(days=6.65)),
+            "ordinary_usage_allowed": False, "rate_limit_reached_type": "weekly",
+            "available_count": 1, "usable_tickets": 1, "credits_balance": 50000,
+        }
+        data.update(overrides)
+        return write_json(self.dir / "account.json", data)
+
+    def test_credits_keep_codex_usable_after_weekly_exhaustion(self) -> None:
+        for now, mode, worker in (
+            (WED_1100_JST, "CODEX", "sol"),
+            (WED_1330_JST, "OFFPEAK_DEEPSEEK", "deepseek"),
+        ):
+            with self.subTest(now=now):
+                self.account(now)
+                result = self.decide(
+                    now, fixture_payloads(now), est=50,
+                    doc=syrtis_doc(now, codex_weekly=100), extra="daily_target_pct = 18",
+                )
+                self.assertEqual((result["mode"], result["worker"]), (mode, worker))
+                self.assertTrue(result["codex"]["usable"])
+                self.assertEqual(result["codex"]["credits_balance"], 50000)
+                self.assertEqual(result["codex"]["usable_tickets"], 1)
+                self.assertEqual(result["signals"]["daily_target"], {"day": 1, "target_pct": 18})
+
+    def test_no_ordinary_usage_or_credits_uses_fallback(self) -> None:
         now = WED_1100_JST
-        for weekly, session in ((100, 12), (92, 96)):
-            with self.subTest(weekly=weekly, session=session):
+        self.account(now, credits_balance=0)
+        for claude_used, worker in ((13, "haiku"), (95, "deepseek")):
+            with self.subTest(claude_used=claude_used):
                 result = self.decide(
                     now, fixture_payloads(now),
-                    doc=syrtis_doc(now, codex_weekly=weekly, codex_session=session),
-                    extra="reset_tickets = 1\ndaily_target_pct = 18",
+                    doc=syrtis_doc(now, claude_session=claude_used),
                 )
-                self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
-                self.assertIn(
-                    "Codex at its limit with 1 reset ticket(s) on hand: "
-                    "redeem one and lower reset_tickets.", result["reason"],
-                )
+                self.assertEqual((result["mode"], result["worker"]), ("FALLBACK", worker))
+                self.assertFalse(result["codex"]["usable"])
+                if worker == "deepseek":
+                    self.assertIn("peak price", result["reason"])
+                    self.assertIn("start_after", result)
 
-    def test_zero_tickets_preserve_existing_rules(self) -> None:
+    def test_tickets_alone_do_not_make_codex_usable(self) -> None:
         now = WED_1100_JST
-        for weekly in (10, 20, 92):
-            with self.subTest(weekly=weekly):
-                doc = syrtis_doc(now, codex_weekly=weekly, weekly_reset_days=6.65)
-                default = self.decide(now, fixture_payloads(now), doc=doc, extra="daily_target_pct = 18")
-                zero = self.decide(
-                    now, fixture_payloads(now), doc=doc,
-                    extra="reset_tickets = 0\ndaily_target_pct = 18",
-                )
-                self.assertEqual(zero, default)
+        self.account(now, credits_balance=0, usable_tickets=2)
+        result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now))
+        self.assertEqual(result["worker"], "haiku")
+        self.assertEqual(result["codex"]["usable_tickets"], 2)
 
-    def test_burn_still_precedes_ticket(self) -> None:
+    def test_ordinary_usage_overrides_tokenbar_limits(self) -> None:
+        now = WED_1100_JST
+        self.account(now, ordinary_usage_allowed=True, credits_balance=0)
+        result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_session=99, codex_weekly=100))
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+
+    def test_watcher_works_without_tokenbar(self) -> None:
+        now = WED_1100_JST
+        self.account(now)
+        cfg = write_config(self.dir, self.dir / "absent.json")
+        result = evaluate_now(now, cfg, self.state, fetcher_for(fixture_payloads(now)))
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+        self.assertTrue(result["codex"]["ok"])
+
+    def test_fresher_weekly_sample_wins(self) -> None:
+        now = WED_1330_JST
+        for account_age, weekly_age, session_age, expected in (
+            (0, 2, 2, 30), (3, 2, 2, 10), (3, 4, 1, 30), (2, 2, 2, 10),
+        ):
+            with self.subTest(account_age=account_age, weekly_age=weekly_age):
+                self.account(now, sampled_at=iso(now - timedelta(minutes=account_age)), used_percent=30)
+                doc = syrtis_doc(now, codex_weekly=10, weekly_reset_days=6.65, age_minutes=session_age)
+                weekly = next(row for row in doc["series"] if row["windowKey"] == "main.weekly.v1")
+                weekly["samples"][0]["sampledAt"] = int((now - timedelta(minutes=weekly_age)).timestamp())
+                result = self.decide(now, fixture_payloads(now), est=50, doc=doc, extra="daily_target_pct = 18")
+                self.assertEqual(result["codex"]["weekly_used"], expected)
+                self.assertEqual(result["worker"], "deepseek" if expected == 30 else "sol")
+
+    def test_missing_stale_and_unreadable_account_use_tokenbar(self) -> None:
+        now = WED_1100_JST
+        for state in ("missing", "stale", "unreadable", "invalid_utf8"):
+            with self.subTest(state=state):
+                if state == "stale":
+                    self.account(now, sampled_at=iso(now - timedelta(minutes=31)))
+                elif state == "unreadable":
+                    (self.dir / "account.json").write_text("{", encoding="utf-8")
+                elif state == "invalid_utf8":
+                    (self.dir / "account.json").write_bytes(b"\xff")
+                result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=10))
+                self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
+                self.assertIsNone(result["codex"]["credits_balance"])
+                self.assertIsNone(result["codex"]["usable_tickets"])
+                self.assertIn("using TokenBar logic", result["reason"])
+
+    def test_stale_account_cannot_authorize_exhausted_tokenbar(self) -> None:
+        now = WED_1100_JST
+        self.account(now, sampled_at=iso(now - timedelta(minutes=31)))
+        result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=100))
+        self.assertEqual((result["mode"], result["worker"]), ("FALLBACK", "haiku"))
+
+    def test_stale_minutes_boundary_is_inclusive(self) -> None:
+        now = WED_1100_JST
+        self.account(now, sampled_at=iso(now - timedelta(minutes=30)))
+        result = self.decide(now, fixture_payloads(now), doc=syrtis_doc(now, codex_weekly=100))
+        self.assertTrue(result["codex"]["usable"])
+
+    def test_burn_precedes_offpeak_deepseek_with_credits(self) -> None:
         now = FIXTURE_NOW
+        self.account(now)
         result = self.decide(
             now, announcing(now, datetime(2026, 10, 23, 18, 0, tzinfo=UTC)),
-            doc=syrtis_doc(now, codex_weekly=92), extra="reset_tickets = 1",
+            doc=syrtis_doc(now, codex_weekly=100),
         )
         self.assertEqual((result["mode"], result["worker"]), ("BURN", "sol"))
 
-    def test_reset_ticket_config(self) -> None:
-        self.assertEqual(qa.Config().reset_tickets, 0)
-        self.assertEqual(qa.config_from_dict({}).reset_tickets, 0)
-        for value in (0, 1, 20):
-            with self.subTest(value=value):
-                self.assertEqual(qa.config_from_dict({"reset_tickets": value}).reset_tickets, value)
-        for value in (-1, 1.5, 21, True, "1", float("nan")):
-            with self.subTest(value=value), self.assertRaises(qa.ConfigError):
-                qa.config_from_dict({"reset_tickets": value})
+
+class DeprecatedConfigTests(DecisionTestCase):
+    def test_old_config_loads_with_notes_and_does_not_change_routing(self) -> None:
+        cfg = qa.config_from_dict({"prime_threshold": 35, "reset_tickets": 1})
+        self.assertFalse(hasattr(cfg, "prime_threshold"))
+        self.assertFalse(hasattr(cfg, "reset_tickets"))
+        for key in ("prime_threshold", "reset_tickets"):
+            self.assertIn(f"{key} is deprecated and ignored", cfg.notes)
+        now = WED_1330_JST
+        result = self.decide(
+            now, fixture_payloads(now), est=50,
+            doc=syrtis_doc(now, codex_weekly=30, weekly_reset_days=6.65),
+            extra="daily_target_pct = 18\nprime_threshold = 35\nreset_tickets = 1",
+        )
+        self.assertEqual((result["mode"], result["worker"]), ("OFFPEAK_DEEPSEEK", "deepseek"))
+        self.assertIn("prime_threshold is deprecated and ignored", result["reason"])
+        self.assertIn("reset_tickets is deprecated and ignored", result["reason"])
 
 
 class BurnTests(DecisionTestCase):
@@ -293,8 +382,8 @@ class BurnTests(DecisionTestCase):
         now = FIXTURE_NOW
         table = announcing(now, datetime(2026, 10, 23, 18, 0, tzinfo=UTC))
         result = self.decide(now, table, doc=syrtis_doc(now, codex_session=96))
-        self.assertEqual(result["mode"], "SAVE")
-        self.assertEqual(result["worker"], "deepseek")
+        self.assertEqual(result["mode"], "FALLBACK")
+        self.assertEqual(result["worker"], "haiku")
         self.assertIn("Reset announced", result["reason"])
         self.assertIn("Codex is not usable", result["reason"])
 
@@ -325,7 +414,7 @@ class BurnTests(DecisionTestCase):
 class SaveTests(DecisionTestCase):
     def test_off_peak_fitting_task_goes_to_deepseek(self) -> None:
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, doc=syrtis_doc(WED_1330_JST, codex_weekly=70))
-        self.assertEqual(result["mode"], "SAVE")
+        self.assertEqual(result["mode"], "OFFPEAK_DEEPSEEK")
         self.assertEqual(result["worker"], "deepseek")
         self.assertTrue(result["signals"]["deepseek_fits"])
 
@@ -340,7 +429,7 @@ class SaveTests(DecisionTestCase):
     def test_task_running_into_peak_uses_codex_when_on_pace(self) -> None:
         # Weekly 0% against 50% elapsed: on pace.
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=120, doc=syrtis_doc(WED_1330_JST, codex_weekly=40))
-        self.assertEqual(result["mode"], "SAVE")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "sol")
         self.assertFalse(result["signals"]["deepseek_fits"])
 
@@ -350,13 +439,13 @@ class SaveTests(DecisionTestCase):
 
     def test_task_running_into_peak_uses_codex_even_when_ahead(self) -> None:
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=120, doc=syrtis_doc(WED_1330_JST, codex_weekly=70))
-        self.assertEqual((result["mode"], result["worker"]), ("SAVE", "sol"))
+        self.assertEqual((result["mode"], result["worker"]), ("CODEX", "sol"))
         self.assertFalse(result["signals"]["deepseek_fits"])
-        self.assertIn("Codex first at peak.", result["reason"])
+        self.assertIn("Codex is the default any hour.", result["reason"])
 
     def test_peak_with_codex_on_pace_goes_to_codex(self) -> None:
         result = self.decide(WED_1100_JST, fixture_payloads(WED_1100_JST), doc=syrtis_doc(WED_1100_JST, codex_weekly=40))
-        self.assertEqual(result["mode"], "SAVE")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "sol")
         self.assertTrue(result["signals"]["in_peak"])
 
@@ -367,8 +456,8 @@ class SaveTests(DecisionTestCase):
                     WED_1100_JST, fixture_payloads(WED_1100_JST), tier=tier,
                     doc=syrtis_doc(WED_1100_JST, codex_weekly=70),
                 )
-                self.assertEqual((result["mode"], result["worker"]), ("SAVE", worker))
-                self.assertIn("Codex first at peak.", result["reason"])
+                self.assertEqual((result["mode"], result["worker"]), ("CODEX", worker))
+                self.assertIn("Codex is the default any hour.", result["reason"])
 
     def test_peak_with_codex_unusable_goes_to_haiku(self) -> None:
         for weekly, session in ((100, 12), (70, 96)):
@@ -377,7 +466,7 @@ class SaveTests(DecisionTestCase):
                     WED_1100_JST, fixture_payloads(WED_1100_JST),
                     doc=syrtis_doc(WED_1100_JST, codex_weekly=weekly, codex_session=session),
                 )
-                self.assertEqual((result["mode"], result["worker"]), ("SAVE", "haiku"))
+                self.assertEqual((result["mode"], result["worker"]), ("FALLBACK", "haiku"))
                 self.assertIn("Codex is not usable", result["reason"])
 
     def test_peak_with_claude_also_over_90_goes_to_deepseek_with_start_after(self) -> None:
@@ -416,11 +505,11 @@ class UnknownDataTests(DecisionTestCase):
     def test_stale_syrtis_off_peak_still_picks_deepseek(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, age_minutes=31))
         self.assertEqual(result["worker"], "deepseek")
-        self.assertNotEqual(result["mode"], "PRIME")
+        self.assertNotEqual(result["mode"], "CODEX")
 
     def test_stale_syrtis_cannot_prime(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, age_minutes=31))
-        self.assertEqual(result["mode"], "SAVE")
+        self.assertEqual(result["mode"], "FALLBACK")
 
     def test_missing_window_is_unknown_and_named(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), doc=syrtis_doc(FIXTURE_NOW, drop=("main.weekly.v1",)))
@@ -530,9 +619,10 @@ class EstimateTests(unittest.TestCase):
 
 
 class ConfigTests(DecisionTestCase):
-    def test_prime_threshold_override_disables_prime(self) -> None:
+    def test_prime_threshold_is_deprecated(self) -> None:
         result = self.decide(FIXTURE_NOW, fixture_payloads(FIXTURE_NOW), extra="prime_threshold = 0")
-        self.assertNotEqual(result["mode"], "PRIME")
+        self.assertEqual(result["mode"], "CODEX")
+        self.assertIn("prime_threshold is deprecated and ignored", result["reason"])
 
     def test_margin_override_changes_fit(self) -> None:
         # With a 120-minute margin, 13:30 + 60 + 120 runs past the 15:00 peak.
@@ -618,7 +708,7 @@ class ReviewFollowUpTests(DecisionTestCase):
 
 
 class BoundaryTests(DecisionTestCase):
-    """Peak edges, judged in JST (UTC+9). Codex weekly 40 keeps PRIME from firing."""
+    """Peak edges, judged in JST (UTC+9), with Codex above the daily target."""
 
     def at(self, now, est=60, tier="hard", **doc_kwargs):
         doc_kwargs.setdefault("codex_weekly", 40)
@@ -1241,7 +1331,7 @@ class FreshnessRound5Tests(DecisionTestCase):
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertTrue(result["codex"]["ok"])
         self.assertEqual(result["codex"]["weekly_used"], 2.0)
-        self.assertEqual(result["mode"], "PRIME")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "sol")
 
     def test_both_windows_40_min_old_is_unknown(self) -> None:
@@ -1263,7 +1353,7 @@ class FreshnessRound5Tests(DecisionTestCase):
 class CodexWeeklyOnlyTests(DecisionTestCase):
     def test_ended_session_uses_fresh_weekly_for_ticket_target_and_peak(self) -> None:
         now = WED_1100_JST
-        for weekly, tickets, mode in ((99, 1, "TICKET"), (20, 0, "TARGET"), (70, 0, "SAVE")):
+        for weekly, tickets, mode in ((99, 1, "CODEX"), (20, 0, "CODEX"), (70, 0, "CODEX")):
             with self.subTest(weekly=weekly, tickets=tickets):
                 doc = syrtis_doc(
                     now, codex_weekly=weekly, weekly_reset_days=5.6,
@@ -1295,7 +1385,7 @@ class CodexWeeklyOnlyTests(DecisionTestCase):
         )
         self.assertTrue(result["codex"]["ok"])
         self.assertFalse(result["codex"]["usable"])
-        self.assertIn("Codex at its limit with 1 reset ticket(s)", result["reason"])
+        self.assertIn("reset_tickets is deprecated and ignored", result["reason"])
 
     def test_stale_weekly_is_unknown_and_tickets_are_not_applied(self) -> None:
         now = WED_1100_JST
@@ -1308,7 +1398,7 @@ class CodexWeeklyOnlyTests(DecisionTestCase):
                 self.assertFalse(result["codex"]["ok"])
                 self.assertFalse(result["codex"]["usable"])
                 self.assertIn("40 min old", result["reason"])
-                self.assertIn("Codex quota unknown; reset_tickets not applied", result["reason"])
+                self.assertIn("reset_tickets is deprecated and ignored", result["reason"])
                 self.assertNotIn("redeem one", result["reason"])
                 self.assertNotIn("weekly only", result["reason"])
 
@@ -1342,7 +1432,7 @@ class PassedResetTests(DecisionTestCase):
         session["sampledAt"] = int((now - timedelta(minutes=60)).timestamp())
         session["resetAt"] = int((now - timedelta(minutes=24)).timestamp())
         result = self.decide(now, fixture_payloads(now), doc=doc, tier="hard")
-        self.assertEqual(result["mode"], "PRIME")
+        self.assertEqual(result["mode"], "CODEX")
         self.assertEqual(result["worker"], "sol")
         self.assertTrue(result["codex"]["ok"])
         self.assertIsNone(result["codex"]["session_used"])
@@ -1397,7 +1487,7 @@ class PassedResetBoundTests(DecisionTestCase):
         )
         result = self.decide(now, fixture_payloads(now), doc=doc)
         self.assertFalse(result["codex"]["ok"])
-        self.assertNotEqual(result["mode"], "PRIME")
+        self.assertNotEqual(result["mode"], "CODEX")
         self.assertIn("more than 30 min ago with no new sample", result["reason"])
         self.assertNotIn("assumed 0%", result["reason"])
 
@@ -1441,7 +1531,7 @@ class PassedResetBoundTests(DecisionTestCase):
                     result = self.decide(now, table, doc=doc, tier=tier, est=est)
                     self.assertFalse(result["codex"]["ok"])
                     self.assertFalse(result["codex"]["usable"])
-                    self.assertNotIn(result["mode"], ("PRIME", "BURN"))
+                    self.assertNotIn(result["mode"], ("CODEX", "BURN"))
                     self.assertNotEqual(result["worker"], "sol" if tier == "hard" else "luna")
                     self.assertNotIn("assumed 0%", result["reason"])
 
