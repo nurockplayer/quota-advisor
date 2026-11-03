@@ -43,7 +43,6 @@ FUTURE_TOLERANCE = timedelta(minutes=5)  # timestamps further ahead than this ar
 WINDOW_EXPIRY_GRACE = timedelta(hours=6)
 TEASE_HORIZON = timedelta(hours=24)
 TEASE_LABEL = "inferred tease (codex-reset)"
-WEEKLY_DAY_SHARE = 100 / 7
 MIN_ACTUALS = 3
 TIERS = ("hard", "routine")
 WORKER_FOR_TIER = {"hard": "sol", "routine": "luna"}
@@ -54,6 +53,7 @@ DEFAULT_EST = {"hard": 150, "routine": 60}
 
 NUMBER_KEYS = {
     "prime_threshold",
+    "daily_target_pct",
     "codex_session_limit",
     "claude_limit",
     "stale_minutes",
@@ -61,7 +61,7 @@ NUMBER_KEYS = {
     "wrapup_minutes",
 }
 STRING_KEYS = {"timezone", "syrtis_path", "feed_url", "forecast_url", "lunarwerx_url"}
-PERCENT_KEYS = {"prime_threshold", "codex_session_limit", "claude_limit"}
+PERCENT_KEYS = {"prime_threshold", "daily_target_pct", "codex_session_limit", "claude_limit"}
 MINUTE_KEYS = {"stale_minutes", "margin_minutes", "wrapup_minutes"}
 MAX_MINUTES = 7 * 24 * 60  # one week; bounds config values, --est and recorded actuals
 SESSION_SECONDS = 5 * 3600
@@ -77,6 +77,8 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Config:
     prime_threshold: float = 35.0
+    daily_target_pct: float = 18.0
+    reset_tickets: int = 0
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
     stale_minutes: float = 30.0
@@ -119,6 +121,10 @@ def config_from_dict(data: dict) -> Config:
             if key in MINUTE_KEYS and number > MAX_MINUTES:
                 raise ConfigError(f"{key} must be at most {MAX_MINUTES} (one week)")
             values[key] = number
+        elif key == "reset_tickets":
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 20:
+                raise ConfigError("reset_tickets must be an integer from 0 to 20")
+            values[key] = value
         elif key in STRING_KEYS:
             if not isinstance(value, str) or not value:
                 raise ConfigError(f"{key} must be a non-empty string")
@@ -798,6 +804,11 @@ def evaluate(
     start_after: Optional[datetime] = None
 
     notes = list(reset.notes)
+    if cfg.reset_tickets > 0 and not codex_usable:
+        notes.append(
+            f"Codex at its limit with {cfg.reset_tickets} reset ticket(s) on hand: "
+            "redeem one and lower reset_tickets."
+        )
     for prov in (codex, claude):
         if not prov.ok:
             notes.append(f"{prov.name} quota unknown: {prov.reason}")
@@ -809,6 +820,11 @@ def evaluate(
         f"Codex 5h {_pct(codex.session_used)}, weekly {_pct(codex.weekly_used)}"
     )
     announced = reset.live[0] if reset.live else None
+    daily_target = None
+    if codex.weekly_elapsed_pct is not None:
+        day = min(math.floor(codex.weekly_elapsed_pct * 7 / 100 + 1e-9) + 1, 7)
+        target = min(cfg.daily_target_pct * day, 100.0)
+        daily_target = {"day": day, "target_pct": target}
 
     if announced is not None and codex_usable:
         mode, worker = "BURN", codex_worker
@@ -818,6 +834,18 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
+    elif cfg.reset_tickets > 0 and codex_usable:
+        mode, worker = "TICKET", codex_worker
+        primary = (
+            f"Reset tickets on hand ({cfg.reset_tickets}): use Codex until weekly 100%, "
+            "then redeem a ticket and lower reset_tickets."
+        )
+    elif cfg.daily_target_pct > 0 and codex_usable and daily_target is not None and codex.weekly_used < target:
+        mode, worker = "TARGET", codex_worker
+        primary = (
+            f"Day {day} of the Codex week: weekly {_pct(codex.weekly_used)} is under today's "
+            f"target {target:g}% ({cfg.daily_target_pct:g}% x day); {codex_state}, Codex any hour."
+        )
     elif codex_usable and codex.weekly_used < cfg.prime_threshold:
         mode, worker = "PRIME", codex_worker
         primary = (
@@ -844,23 +872,16 @@ def evaluate(
                 if peak is not None
                 else f"the task would run past the peak start {local_fmt(peak_start, cfg)}"
             )
-            allowance = f"elapsed {codex.weekly_elapsed_pct:.0f}% + {WEEKLY_DAY_SHARE:.1f}% allowance" if codex.ok else ""
-            if codex_usable and codex.weekly_used <= codex.weekly_elapsed_pct + WEEKLY_DAY_SHARE:
+            if codex_usable:
                 worker = codex_worker
                 primary = (
-                    f"DeepSeek not usable because {why}; Codex weekly {_pct(codex.weekly_used)} "
-                    f"is on pace ({allowance})."
+                    f"DeepSeek not usable because {why}; Codex usable ({codex_state}), "
+                    "Codex first at peak."
                 )
             elif claude_usable:
                 worker = "haiku"
-                if codex_usable:
-                    codex_part = (
-                        f"Codex weekly {_pct(codex.weekly_used)} is ahead of pace ({allowance})"
-                    )
-                else:
-                    codex_part = f"Codex is not usable ({codex_state})"
                 primary = (
-                    f"DeepSeek not usable because {why}; {codex_part}; Claude 5h "
+                    f"DeepSeek not usable because {why}; Codex is not usable ({codex_state}); Claude 5h "
                     f"{_pct(claude.session_used)} and weekly {_pct(claude.weekly_used)} are under "
                     f"{cfg.claude_limit:g}%."
                 )
@@ -896,6 +917,7 @@ def evaluate(
             "codex": codex.as_dict(codex_usable),
             "claude": claude.as_dict(claude_usable),
             "signals": {
+                "daily_target": daily_target,
                 "announced": announced is not None,
                 "announcement_at": iso(announced.at) if announced else None,
                 "announcement_source": announced.label if announced else None,

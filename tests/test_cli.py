@@ -75,7 +75,8 @@ class DecisionOutputTests(CliTestCase):
             self.assertIn(key, data)
         self.assertEqual(data["est_minutes"], 90)
         self.assertEqual(data["signals"]["est_source"], "--est")
-        self.assertEqual(data["mode"], "PRIME")
+        self.assertEqual(data["mode"], "TARGET")
+        self.assertEqual(data["signals"]["daily_target"], {"day": 1, "target_pct": 18.0})
         self.assertNotIn("start_after", data)
 
     def test_decision_is_logged_with_id(self) -> None:
