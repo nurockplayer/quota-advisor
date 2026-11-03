@@ -2,7 +2,7 @@
 
 ## Goal
 
-A local CLI that answers one question for AI coding leads: which worker should take this task right now? The answer is `sol`, `luna`, `deepseek` or `haiku`. Leads run it before every dispatch, so it must be fast, honest about stale data, and conservative when unsure.
+A local CLI that answers one question for AI coding leads: which worker should take this task right now? The answer is `codex`, `deepseek` or `haiku`. Leads run it before every dispatch, so it must be fast, honest about stale data, and conservative when unsure.
 
 ## Constraints
 
@@ -36,7 +36,7 @@ Let `codex_ok` = Codex 5 h used < 95% and weekly used < 100%, from fresh Syrtis 
    - Else if Claude 5 h used < 90% and Claude weekly used < 90% → `haiku`.
    - Else → `deepseek`, with the reason saying it runs at peak price (pay-as-you-go beats stalling), and `start_after` set to the next off-peak start.
 
-Codex means `sol` for `--tier hard` and `luna` for `--tier routine`.
+Both tiers use the `codex` worker.
 
 ## Time
 
@@ -52,7 +52,7 @@ Codex means `sol` for `--tier hard` and `luna` for `--tier routine`.
 
 ## CLI
 
-- `quota-advisor --tier hard|routine [--est 90m] [--json]` — prints the worker name only; `--json` prints `{id, worker, mode, reason, start_after?, est_minutes, codex:{...}, claude:{...}, signals:{...}, data_age:{...}}`.
+- `quota-advisor --tier hard|routine [--est 90m] [--json]` — prints the worker name only; `--json` prints `{id, tier, worker, mode, reason, start_after?, est_minutes, codex:{...}, claude:{...}, signals:{...}, data_age:{...}}`.
 - `quota-advisor status` — human summary: mode, each source and its age, the numbers, next peak.
 - `quota-advisor next-peak` — next peak start and wrap-up time.
 - `quota-advisor done <id> [--minutes N]` — records the actual duration for a decision (default: now minus the decision time).
@@ -64,7 +64,7 @@ Optional `~/.config/quota-advisor/config.toml` overrides defaults: `prime_thresh
 
 ## Tests (one per case, fixed clock, fixtures)
 
-- The real fixtures at their capture time: the spent signal does not BURN; Codex weekly 0% → PRIME → `sol` / `luna`.
+- The real fixtures at their capture time: the spent signal does not BURN; Codex weekly 0% → PRIME → `codex`.
 - A fresh announcement after the last reset → BURN at off-peak and peak.
 - BURN with Codex 5 h at 96% → falls through to SAVE.
 - SAVE off-peak with a task that fits before the peak → `deepseek`; one that would run into the peak → Codex/Haiku per the rules.

@@ -59,25 +59,31 @@ class DecisionOutputTests(CliTestCase):
     def test_plain_output_is_worker_name_only(self) -> None:
         code, out, err = self.run_cli(["--tier", "hard"])
         self.assertEqual(code, 0)
-        self.assertEqual(out, "sol\n")
+        self.assertEqual(out, "codex\n")
         self.assertEqual(err, "")
 
     def test_routine_plain_output(self) -> None:
         code, out, _ = self.run_cli(["--tier", "routine", "--est", "1h"])
         self.assertEqual(code, 0)
-        self.assertEqual(out, "luna\n")
+        self.assertEqual(out, "codex\n")
 
     def test_json_output_has_brief_fields_and_id(self) -> None:
         code, out, _ = self.run_cli(["--tier", "hard", "--est", "90m", "--json"])
         self.assertEqual(code, 0)
         data = json.loads(out)
-        for key in ("id", "worker", "mode", "reason", "est_minutes", "codex", "claude", "signals", "data_age"):
+        for key in ("id", "tier", "worker", "mode", "reason", "est_minutes", "codex", "claude", "signals", "data_age"):
             self.assertIn(key, data)
+        self.assertEqual((data["tier"], data["worker"]), ("hard", "codex"))
         self.assertEqual(data["est_minutes"], 90)
         self.assertEqual(data["signals"]["est_source"], "--est")
         self.assertEqual(data["mode"], "CODEX")
         self.assertEqual(data["signals"]["daily_target"], {"day": 1, "target_pct": 18.0})
         self.assertNotIn("start_after", data)
+
+    def test_routine_json_names_tier_and_worker(self) -> None:
+        code, out, err = self.run_cli(["--tier", "routine", "--json"])
+        data = json.loads(out)
+        self.assertEqual((code, err, data["tier"], data["worker"]), (0, "", "routine", "codex"))
 
     def test_peak_wait_plain_json_and_log(self) -> None:
         now = WED_1100_JST
@@ -97,7 +103,7 @@ class DecisionOutputTests(CliTestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["kind"], "decision")
         self.assertEqual(records[0]["id"], data["id"])
-        self.assertEqual(records[0]["worker"], "sol")
+        self.assertEqual(records[0]["worker"], "codex")
 
     def test_tier_is_required_for_a_decision(self) -> None:
         with self.assertRaises(SystemExit) as ctx:
@@ -130,10 +136,20 @@ class DecisionOutputTests(CliTestCase):
         self.assertEqual(code, 0)
         data = json.loads(out)
         self.assertTrue(data["signals"]["in_peak"])
-        self.assertEqual(data["worker"], "sol")
+        self.assertEqual(data["worker"], "codex")
 
 
 class DoneAndEstimateTests(CliTestCase):
+    def test_legacy_workers_are_read_as_codex_and_done_works(self) -> None:
+        for worker, tier in (("sol", "hard"), ("luna", "routine")):
+            with self.subTest(worker=worker):
+                qa.append_log(self.state, {"kind": "decision", "id": worker, "tier": tier,
+                                           "worker": worker, "ts": FIXTURE_NOW.isoformat()})
+                self.assertEqual(self.log_records()[-1]["worker"], "codex")
+                code, out, err = self.run_cli(["done", worker, "--minutes", "42"])
+                self.assertEqual((code, out, err), (0, f"recorded 42 min for {worker} ({tier})\n", ""))
+                self.assertEqual(self.log_records()[-1]["tier"], tier)
+
     def decision_id(self, now, est=None) -> str:
         argv = ["--tier", "hard", "--json"] + (["--est", est] if est else [])
         _, out, _ = self.run_cli(argv, now=now)
@@ -225,8 +241,8 @@ class StatusTests(CliTestCase):
     def test_status_shows_both_tiers_and_sources(self) -> None:
         code, out, err = self.run_cli(["status"])
         self.assertEqual(code, 0, err)
-        self.assertIn("hard     -> sol", out)
-        self.assertIn("routine  -> luna", out)
+        self.assertIn("hard     -> codex [CODEX]", out)
+        self.assertIn("routine  -> codex [CODEX]", out)
         self.assertIn("feed", out)
         self.assertIn("next peak start", out)
         self.assertEqual(self.log_records(), [])
@@ -240,13 +256,13 @@ class DecisionLogFailureTests(CliTestCase):
         self.assertEqual(code, 0, err)
         data = json.loads(out)
         self.assertIn("decision history unavailable", data["reason"])
-        self.assertEqual(data["worker"], "sol")
+        self.assertEqual(data["worker"], "codex")
 
     def test_log_path_is_directory_still_prints_worker_and_exits_3(self) -> None:
         (self.state / "decisions.log").mkdir(parents=True)
         code, out, err = self.run_cli(["--tier", "hard"])
         self.assertEqual(code, 3)
-        self.assertEqual(out, "sol\n")
+        self.assertEqual(out, "codex\n")
         self.assertIn("NOT recorded", err)
 
     def test_done_fails_when_history_is_unreadable(self) -> None:
@@ -294,7 +310,7 @@ class ConfigAndRecordingCliTests(CliTestCase):
         data = json.loads(out)
         self.assertIsNone(data["id"])
         self.assertFalse(data["recorded"])
-        self.assertEqual(data["worker"], "sol")
+        self.assertEqual(data["worker"], "codex")
         self.assertIn("NOT recorded", err)
 
     def test_json_reports_recorded_id_on_success(self) -> None:
