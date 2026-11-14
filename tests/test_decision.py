@@ -562,7 +562,7 @@ class SaveTests(DecisionTestCase):
         self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 4, 0, tzinfo=UTC)))
 
     def test_weekend_is_always_off_peak(self) -> None:
-        result = self.decide(SAT_1100_JST, fixture_payloads(SAT_1100_JST), est=300, doc=syrtis_doc(SAT_1100_JST, codex_weekly=70))
+        result = self.decide(SAT_1100_JST, fixture_payloads(SAT_1100_JST), est=300, doc=syrtis_doc(SAT_1100_JST, codex_weekly=85))
         self.assertFalse(result["signals"]["in_peak"])
         self.assertEqual(result["worker"], "deepseek")
         self.assertTrue(result["signals"]["deepseek_fits"])
@@ -716,7 +716,7 @@ class ConfigTests(DecisionTestCase):
 
     def test_peak_window_override(self) -> None:
         # Only 10:00-12:00 is peak, so Wed 13:30 JST is off-peak with a long runway.
-        result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, extra='peak_windows = [["10:00", "12:00"]]', doc=syrtis_doc(WED_1330_JST, codex_weekly=40))
+        result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, extra='peak_windows = [["10:00", "12:00"]]', doc=syrtis_doc(WED_1330_JST, codex_weekly=85))
         self.assertEqual(result["worker"], "deepseek")
         self.assertEqual(result["signals"]["next_peak_start"], qa.iso(datetime(2026, 10, 29, 1, 0, tzinfo=UTC)))
 
@@ -793,10 +793,10 @@ class ReviewFollowUpTests(DecisionTestCase):
 
 
 class BoundaryTests(DecisionTestCase):
-    """Peak edges, judged in JST (UTC+9), with Codex above the daily target."""
+    """Peak edges, judged in JST (UTC+9), with Codex ahead of pace."""
 
     def at(self, now, est=60, tier="hard", **doc_kwargs):
-        doc_kwargs.setdefault("codex_weekly", 40)
+        doc_kwargs.setdefault("codex_weekly", 85)
         return self.decide(now, fixture_payloads(now), tier=tier, est=est, doc=syrtis_doc(now, **doc_kwargs))
 
     def test_friday_1900_rolls_to_off_peak_and_weekend_runway(self) -> None:
@@ -1233,7 +1233,7 @@ class ReviewRound3Tests(DecisionTestCase):
     def test_wrap_up_must_also_clear_the_estimate(self) -> None:
         # Wed 09:00 JST, margin 0: 09:00 + 59 min runs past the 09:50 wrap-up.
         now = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
-        doc = syrtis_doc(now, codex_weekly=40)
+        doc = syrtis_doc(now, codex_weekly=85)
         result = self.decide(now, fixture_payloads(now), est=59, doc=doc, extra="margin_minutes = 0")
         self.assertNotEqual(result["worker"], "deepseek")
         self.assertFalse(result["signals"]["deepseek_fits"])
