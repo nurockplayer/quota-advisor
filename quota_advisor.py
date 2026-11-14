@@ -303,6 +303,7 @@ class Provider:
     session_used: Optional[float] = None
     weekly_used: Optional[float] = None
     weekly_elapsed_pct: Optional[float] = None
+    weekly_resets_at: Optional[datetime] = None
     sampled_at: Optional[datetime] = None
     weekly_sampled_at: Optional[datetime] = None
     account_usable: Optional[bool] = None
@@ -325,22 +326,46 @@ class Provider:
         }
 
 
-def provider_pace(provider: Provider, cfg: Config) -> Optional[dict]:
-    used, elapsed = provider.weekly_used, provider.weekly_elapsed_pct
+def weekday_share(reset: datetime, now: datetime, cfg: Config) -> float:
+    tz = ZoneInfo(cfg.timezone)
+    end = reset.astimezone(UTC)
+    start = end - timedelta(days=7)
+    cutoff = min(max(now.astimezone(UTC), start), end)
+    day = start.astimezone(tz).date()
+    total = elapsed = 0.0
+    while datetime.combine(day, time.min, tzinfo=tz).astimezone(UTC) < end:
+        day_start = datetime.combine(day, time.min, tzinfo=tz).astimezone(UTC)
+        day_end = datetime.combine(day + timedelta(days=1), time.min, tzinfo=tz).astimezone(UTC)
+        if day.weekday() in PEAK_WEEKDAYS:
+            left, right = max(start, day_start), min(end, day_end)
+            total += max(0.0, (right - left).total_seconds())
+            elapsed += max(0.0, (min(right, cutoff) - left).total_seconds())
+        day += timedelta(days=1)
+    return 100 * elapsed / total
+
+
+def provider_pace(provider: Provider, cfg: Config, now: datetime) -> Optional[dict]:
+    used = provider.weekly_used
+    clock = "weekdays" if provider.name.lower() == "codex" else "week"
+    elapsed = (weekday_share(provider.weekly_resets_at, now, cfg)
+               if clock == "weekdays" and provider.weekly_resets_at is not None
+               else provider.weekly_elapsed_pct if clock == "week" else None)
     if used is None or elapsed is None:
         return None
-    target = 10 * math.sqrt(elapsed)
+    target = elapsed if clock == "weekdays" else 10 * math.sqrt(elapsed)
     gap = used - target
     state = "behind" if gap <= -cfg.pace_band_pct else "ahead" if gap >= cfg.pace_band_pct else "on"
     return {"state": state, "used_pct": round(used, 1), "elapsed_pct": round(elapsed, 1),
-            "target_pct": round(target, 1), "gap_pct": round(gap, 1)}
+            "target_pct": round(target, 1), "gap_pct": round(gap, 1), "clock": clock}
 
 
 def _provider_pace_text(item: Optional[dict]) -> str:
     if item is None:
         return "unknown"
+    clock = "20% a weekday" if item["clock"] == "weekdays" else f"at {item['elapsed_pct']:.0f}% of the week"
+    separator = ": " if item["clock"] == "weekdays" else " "
     return (f"{item['state']} ({item['used_pct']:.0f}% used, target "
-            f"{item['target_pct']:.0f}% at {item['elapsed_pct']:.0f}% of the week)")
+            f"{item['target_pct']:.0f}%{separator}{clock})")
 
 
 def _pace_text(pace: dict) -> str:
@@ -510,6 +535,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
                 label, False, "; ".join(problems), sampled_at=newest, reset_times=reset_times,
                 weekly_used=weekly["used"] if pid == "codex" and weekly is not None else None,
                 weekly_elapsed_pct=weekly["elapsed_pct"] if pid == "codex" and weekly is not None else None,
+                weekly_resets_at=weekly["resets_at"] if pid == "codex" and weekly is not None else None,
                 weekly_sampled_at=results["weekly"][2] if pid == "codex" and weekly is not None else None,
             )
             continue
@@ -530,6 +556,7 @@ def read_syrtis(path: Path, now: datetime, cfg: Config) -> dict[str, Provider]:
             session_used=session["used"] if session is not None else None,
             weekly_used=weekly["used"],
             weekly_elapsed_pct=weekly["elapsed_pct"],
+            weekly_resets_at=weekly["resets_at"],
             sampled_at=newest,
             weekly_sampled_at=results["weekly"][2],
             reset_times=reset_times,
@@ -562,7 +589,7 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
             raise ValueError("used_percent or resets_at invalid")
     except (OSError, ValueError) as exc:
         if not codex.ok:
-            codex = replace(codex, weekly_used=None, weekly_elapsed_pct=None, weekly_sampled_at=None)
+            codex = replace(codex, weekly_used=None, weekly_elapsed_pct=None, weekly_resets_at=None, weekly_sampled_at=None)
         return replace(codex, notes=[*codex.notes, f"Codex account state unavailable ({exc}); using TokenBar logic"])
 
     tickets = data.get("usable_tickets")
@@ -576,6 +603,7 @@ def read_codex_account(codex: Provider, now: datetime, cfg: Config) -> Provider:
         codex = replace(
             codex, ok=True, reason=None, weekly_used=used,
             weekly_elapsed_pct=max(0.0, min(100.0, elapsed / WEEKLY_SECONDS * 100)),
+            weekly_resets_at=resets,
             sampled_at=sampled, weekly_sampled_at=sampled,
             notes=["Codex weekly quota from codex-quota-watch account state"],
         )
@@ -927,7 +955,7 @@ def evaluate(
         f"Codex 5h {_pct(codex.session_used)}, weekly {_pct(codex.weekly_used)}"
     )
     announced = reset.live[0] if reset.live else None
-    codex_pace = provider_pace(codex, cfg)
+    codex_pace = provider_pace(codex, cfg, now)
 
     if announced is not None and codex_usable:
         mode, worker = "BURN", codex_worker
@@ -940,7 +968,7 @@ def evaluate(
     elif codex_pace is not None and codex_pace["state"] == "ahead" and deepseek_fits:
         mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
         primary = (
-            f"Codex is ahead of pace; off-peak, "
+            f"Codex pace {_provider_pace_text(codex_pace)}; off-peak, "
             f"and the task ({est_minutes} min, {est_source}) with margin ends "
             f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
         )
@@ -997,7 +1025,7 @@ def evaluate(
             "est_minutes": est_minutes,
             "codex": {**codex.as_dict(codex_usable), "credits_balance": codex.credits_balance, "usable_tickets": codex.usable_tickets},
             "claude": claude.as_dict(claude_usable),
-            "pace": {"codex": codex_pace, "claude": provider_pace(claude, cfg)},
+            "pace": {"codex": codex_pace, "claude": provider_pace(claude, cfg, now)},
             "signals": {
                 "announced": announced is not None,
                 "announcement_at": iso(announced.at) if announced else None,
@@ -1159,7 +1187,7 @@ def _cmd_status(now: datetime, cfg: Config, state_dir: Path, fetcher, out) -> in
             )
         else:
             out.write(f"{prov.name:<7} unknown: {prov.reason}\n")
-    out.write("pace       " + _pace_text({name: provider_pace(g.providers[name], cfg) for name in ("codex", "claude")}) + "\n")
+    out.write("pace       " + _pace_text({name: provider_pace(g.providers[name], cfg, now) for name in ("codex", "claude")}) + "\n")
     for src in (g.feed, g.forecast, g.lunar):
         if src.body is None:
             out.write(f"{src.name:<10} unavailable: {src.error}\n")

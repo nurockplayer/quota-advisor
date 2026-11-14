@@ -72,25 +72,37 @@ class DecisionTestCase(unittest.TestCase):
 
 
 class PaceTests(unittest.TestCase):
-    def test_pace_values_and_boundaries(self) -> None:
-        cases = [(27, 48.2, "behind", 69.4, -42.4), (79, 84.4, "behind", 91.9, -12.9),
-                 (85, 84.4, "on", 91.9, -6.9), (100, 64, "ahead", 80, 20),
-                 (70, 64, "behind", 80, -10), (90, 64, "ahead", 80, 10),
-                 (70.1, 64, "on", 80, -9.9), (89.9, 64, "on", 80, 9.9),
-                 (0, 0, "on", 0, 0)]
-        for used, elapsed, state, target, gap in cases:
-            with self.subTest(used=used, elapsed=elapsed):
-                pace = qa.provider_pace(qa.Provider("codex", True, weekly_used=used, weekly_elapsed_pct=elapsed), qa.Config())
-                self.assertEqual(pace, {"state": state, "used_pct": used, "elapsed_pct": elapsed,
-                                        "target_pct": target, "gap_pct": gap})
+    def test_weekday_share_and_claude(self) -> None:
+        tz = timezone(timedelta(hours=9))
+        reset = datetime(2026, 11, 18, 3, 40, tzinfo=tz)
+        cfg = qa.Config()
+        codex = qa.Provider("Codex", True, weekly_used=27, weekly_resets_at=reset)
+        for now, expected in [(datetime(2026, 11, 14, 13, 57, tzinfo=tz), 56.9),
+                              (datetime(2026, 11, 15, 23, tzinfo=tz), 56.9),
+                              (datetime(2026, 11, 13, 12, tzinfo=tz), 46.9),
+                              (datetime(2026, 11, 16, 12, tzinfo=tz), 66.9)]:
+            pace = qa.provider_pace(codex, cfg, now)
+            self.assertEqual((pace["elapsed_pct"], pace["target_pct"], pace["clock"]), (expected, expected, "weekdays"))
+        now = datetime(2026, 11, 14, 13, 57, tzinfo=tz)
+        pace = qa.provider_pace(codex, cfg, now)
+        self.assertEqual((pace["gap_pct"], pace["state"]), (-29.9, "behind"))
+        self.assertEqual(qa._provider_pace_text(pace), "behind (27% used, target 57%: 20% a weekday)")
+        claude = qa.provider_pace(qa.Provider("Claude", True, weekly_used=79, weekly_elapsed_pct=84.4), cfg, now)
+        self.assertEqual((claude["clock"], claude["target_pct"]), ("week", 91.9))
+        self.assertIn("target 92% at 84% of the week", qa._provider_pace_text(claude))
+        self.assertIsNone(qa.provider_pace(qa.Provider("Codex", True, weekly_used=27), cfg, now))
 
-    def test_band_and_missing_values(self) -> None:
-        cfg = qa.config_from_dict({"pace_band_pct": 5})
-        self.assertEqual(qa.Config().pace_band_pct, 10.0)
-        for used, state in [(75, "behind"), (85, "ahead"), (76, "on")]:
-            self.assertEqual(qa.provider_pace(qa.Provider("codex", True, weekly_used=used, weekly_elapsed_pct=64), cfg)["state"], state)
-        for used, elapsed in [(None, 50), (50, None)]:
-            self.assertIsNone(qa.provider_pace(qa.Provider("codex", False, weekly_used=used, weekly_elapsed_pct=elapsed), cfg))
+    def test_aligned_week_and_band(self) -> None:
+        tz = timezone(timedelta(hours=9))
+        reset = datetime(2026, 11, 16, tzinfo=tz)
+        cfg = qa.Config()
+        for now, expected in [(datetime(2026, 11, 10, tzinfo=tz), 20),
+                              (datetime(2026, 11, 12, 12, tzinfo=tz), 70),
+                              (datetime(2026, 11, 15, 12, tzinfo=tz), 100)]:
+            self.assertAlmostEqual(qa.weekday_share(reset, now, cfg), expected)
+        now = datetime(2026, 11, 12, 12, tzinfo=tz)
+        for used, state in [(60, "behind"), (80, "ahead"), (60.1, "on"), (79.9, "on")]:
+            self.assertEqual(qa.provider_pace(qa.Provider("Codex", True, weekly_used=used, weekly_resets_at=reset), cfg, now)["state"], state)
         for value in ["5", -1, 101, True]:
             with self.subTest(value=value), self.assertRaises(qa.ConfigError):
                 qa.config_from_dict({"pace_band_pct": value})
@@ -120,17 +132,14 @@ class RealFixtureTests(DecisionTestCase):
 
 class TargetTests(DecisionTestCase):
     def test_pace_drives_offpeak_routing(self) -> None:
-        now = WED_1330_JST
-        for used, elapsed, worker in ((60, 25, "deepseek"), (59, 25, "codex"),
-                                      (20, 14, "codex"), (95, 85, "codex")):
-            with self.subTest(used=used, elapsed=elapsed):
+        now = datetime(2026, 11, 14, 4, 57, tzinfo=UTC)
+        reset = datetime(2026, 11, 17, 18, 40, tzinfo=UTC)
+        for used, worker, state in ((67, "deepseek", "ahead"), (66, "codex", "on"),
+                                    (47, "codex", "on"), (46, "codex", "behind")):
+            with self.subTest(used=used):
                 result = self.decide(now, fixture_payloads(now), est=50,
-                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=7 * (1 - elapsed / 100)))
-                self.assertEqual(result["worker"], worker)
-                self.assertEqual(result["mode"], "OFFPEAK_DEEPSEEK" if worker == "deepseek" else "CODEX")
-                self.assertNotIn("daily_target", result["signals"])
-                if used == 20:
-                    self.assertIn("Codex pace behind", result["reason"])
+                    doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=(reset - now).total_seconds() / 86400))
+                self.assertEqual((result["worker"], result["pace"]["codex"]["state"]), (worker, state))
 
     def test_ahead_requires_fit_and_custom_band(self) -> None:
         for now, est, used, extra, worker in ((WED_1100_JST, 50, 60, "", "codex"),
