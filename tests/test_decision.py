@@ -173,7 +173,7 @@ class CodexDefaultTests(DecisionTestCase):
             (WED_1330_JST, 50, 35, "OFFPEAK_DEEPSEEK"),
             (WED_1100_JST, 50, 35, "CODEX"),
             (WED_1330_JST, 61, 35, "CODEX"),
-            (WED_1330_JST, 50, 18, "CODEX"),
+            (WED_1330_JST, 50, 5, "CODEX"),
         ):
             with self.subTest(now=now, est=est, used=used):
                 result = self.decide(
@@ -301,12 +301,12 @@ class AccountStateTests(DecisionTestCase):
         now = WED_1330_JST
         for account_age, expected_used, mode, worker in (
             (3, 34, "OFFPEAK_DEEPSEEK", "deepseek"),
-            (0, 30, "CODEX", "codex"),
+            (0, 10, "CODEX", "codex"),
         ):
             with self.subTest(account_age=account_age):
                 self.account(
                     now, sampled_at=iso(now - timedelta(minutes=account_age)),
-                    used_percent=30, ordinary_usage_allowed=True, credits_balance=0,
+                    used_percent=10, ordinary_usage_allowed=True, credits_balance=0,
                 )
                 doc = syrtis_doc(
                     now, codex_weekly=34, age_minutes=1, weekly_reset_days=6.65,
