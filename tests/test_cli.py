@@ -60,7 +60,8 @@ class DecisionOutputTests(CliTestCase):
         code, out, err = self.run_cli(["--tier", "hard"])
         self.assertEqual(code, 0)
         self.assertEqual(out, "codex\n")
-        self.assertEqual(err, "")
+        self.assertTrue(err.startswith("pace: codex "))
+        self.assertIn("; claude ", err)
 
     def test_routine_plain_output(self) -> None:
         code, out, _ = self.run_cli(["--tier", "routine", "--est", "1h"])
@@ -68,9 +69,11 @@ class DecisionOutputTests(CliTestCase):
         self.assertEqual(out, "codex\n")
 
     def test_json_output_has_brief_fields_and_id(self) -> None:
-        code, out, _ = self.run_cli(["--tier", "hard", "--est", "90m", "--json"])
+        code, out, err = self.run_cli(["--tier", "hard", "--est", "90m", "--json"])
         self.assertEqual(code, 0)
         data = json.loads(out)
+        self.assertNotIn("pace: ", err)
+        self.assertEqual(set(data["pace"]), {"codex", "claude"})
         for key in ("id", "tier", "worker", "mode", "reason", "est_minutes", "codex", "claude", "signals", "data_age"):
             self.assertIn(key, data)
         self.assertEqual((data["tier"], data["worker"]), ("hard", "codex"))
@@ -89,7 +92,8 @@ class DecisionOutputTests(CliTestCase):
         now = WED_1100_JST
         cfg = write_config(self.dir, write_json(self.dir / "syrtis.json", syrtis_doc(now, codex_weekly=100)))
         code, out, err = self.run_cli(["--tier", "hard"], now=now, cfg=cfg)
-        self.assertEqual((code, out, err), (0, "none\n", ""))
+        self.assertEqual((code, out), (0, "none\n"))
+        self.assertTrue(err.startswith("pace: "))
         code, out, err = self.run_cli(["--tier", "hard", "--json"], now=now, cfg=cfg)
         data = json.loads(out)
         self.assertEqual((code, err, data["worker"], data["mode"]), (0, "", "none", "WAIT"))
@@ -245,7 +249,19 @@ class StatusTests(CliTestCase):
         self.assertIn("routine  -> codex [CODEX]", out)
         self.assertIn("feed", out)
         self.assertIn("next peak start", out)
+        self.assertIn("\npace       codex ", out)
         self.assertEqual(self.log_records(), [])
+
+    def test_unknown_pace_in_json_and_text(self) -> None:
+        cfg = write_config(self.dir, self.dir / "absent.json")
+        code, out, err = self.run_cli(["--tier", "hard", "--json"], cfg=cfg)
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["pace"], {"codex": None, "claude": None})
+        self.assertNotIn("pace: ", err)
+        _, _, err = self.run_cli(["--tier", "hard"], cfg=cfg)
+        self.assertEqual(err, "pace: codex unknown; claude unknown\n")
+        _, out, _ = self.run_cli(["status"], cfg=cfg)
+        self.assertIn("\npace       codex unknown; claude unknown\n", out)
 
 
 class DecisionLogFailureTests(CliTestCase):

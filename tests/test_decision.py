@@ -74,6 +74,31 @@ class DecisionTestCase(unittest.TestCase):
         return result
 
 
+class PaceTests(unittest.TestCase):
+    def test_pace_values_and_boundaries(self) -> None:
+        cases = [(27, 48.2, "behind", 69.4, -42.4), (79, 84.4, "behind", 91.9, -12.9),
+                 (85, 84.4, "on", 91.9, -6.9), (100, 64, "ahead", 80, 20),
+                 (70, 64, "behind", 80, -10), (90, 64, "ahead", 80, 10),
+                 (70.1, 64, "on", 80, -9.9), (89.9, 64, "on", 80, 9.9),
+                 (0, 0, "on", 0, 0)]
+        for used, elapsed, state, target, gap in cases:
+            with self.subTest(used=used, elapsed=elapsed):
+                pace = qa.provider_pace(qa.Provider("codex", True, weekly_used=used, weekly_elapsed_pct=elapsed), qa.Config())
+                self.assertEqual(pace, {"state": state, "used_pct": used, "elapsed_pct": elapsed,
+                                        "target_pct": target, "gap_pct": gap})
+
+    def test_band_and_missing_values(self) -> None:
+        cfg = qa.config_from_dict({"pace_band_pct": 5})
+        self.assertEqual(qa.Config().pace_band_pct, 10.0)
+        for used, state in [(75, "behind"), (85, "ahead"), (76, "on")]:
+            self.assertEqual(qa.provider_pace(qa.Provider("codex", True, weekly_used=used, weekly_elapsed_pct=64), cfg)["state"], state)
+        for used, elapsed in [(None, 50), (50, None)]:
+            self.assertIsNone(qa.provider_pace(qa.Provider("codex", False, weekly_used=used, weekly_elapsed_pct=elapsed), cfg))
+        for value in ["5", -1, 101, True]:
+            with self.subTest(value=value), self.assertRaises(qa.ConfigError):
+                qa.config_from_dict({"pace_band_pct": value})
+
+
 class RealFixtureTests(DecisionTestCase):
     def test_spent_signal_does_not_burn(self) -> None:
         # feed.signal.active is true, but it is dated 2026-10-22 before the 2026-10-23 reset.

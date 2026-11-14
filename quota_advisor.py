@@ -55,6 +55,7 @@ DEFAULT_EST = {"hard": 150, "routine": 60}
 NUMBER_KEYS = {
     "prime_threshold",
     "daily_target_pct",
+    "pace_band_pct",
     "codex_session_limit",
     "claude_limit",
     "stale_minutes",
@@ -62,7 +63,7 @@ NUMBER_KEYS = {
     "wrapup_minutes",
 }
 STRING_KEYS = {"timezone", "syrtis_path", "account_state_path", "feed_url", "forecast_url", "lunarwerx_url"}
-PERCENT_KEYS = {"prime_threshold", "daily_target_pct", "codex_session_limit", "claude_limit"}
+PERCENT_KEYS = {"prime_threshold", "daily_target_pct", "pace_band_pct", "codex_session_limit", "claude_limit"}
 MINUTE_KEYS = {"stale_minutes", "margin_minutes", "wrapup_minutes"}
 MAX_MINUTES = 7 * 24 * 60  # one week; bounds config values, --est and recorded actuals
 SESSION_SECONDS = 5 * 3600
@@ -78,6 +79,7 @@ class ConfigError(Exception):
 @dataclass(frozen=True)
 class Config:
     daily_target_pct: float = 18.0
+    pace_band_pct: float = 10.0
     peak_fallback: str = "stop"
     codex_session_limit: float = 95.0
     claude_limit: float = 90.0
@@ -322,6 +324,29 @@ class Provider:
             else round(self.weekly_elapsed_pct, 1),
             "sampled_at": iso(self.sampled_at) if self.sampled_at else None,
         }
+
+
+def provider_pace(provider: Provider, cfg: Config) -> Optional[dict]:
+    used, elapsed = provider.weekly_used, provider.weekly_elapsed_pct
+    if used is None or elapsed is None:
+        return None
+    target = 10 * math.sqrt(elapsed)
+    gap = used - target
+    state = "behind" if gap <= -cfg.pace_band_pct else "ahead" if gap >= cfg.pace_band_pct else "on"
+    return {"state": state, "used_pct": round(used, 1), "elapsed_pct": round(elapsed, 1),
+            "target_pct": round(target, 1), "gap_pct": round(gap, 1)}
+
+
+def _pace_text(pace: dict) -> str:
+    parts = []
+    for name in ("codex", "claude"):
+        item = pace[name]
+        if item is None:
+            parts.append(f"{name} unknown")
+        else:
+            parts.append(f"{name} {item['state']} ({item['used_pct']:.0f}% used, target "
+                         f"{item['target_pct']:.0f}% at {item['elapsed_pct']:.0f}% of the week)")
+    return "; ".join(parts)
 
 
 def _unknown_providers(reason: str) -> dict[str, Provider]:
@@ -978,6 +1003,7 @@ def evaluate(
             "est_minutes": est_minutes,
             "codex": {**codex.as_dict(codex_usable), "credits_balance": codex.credits_balance, "usable_tickets": codex.usable_tickets},
             "claude": claude.as_dict(claude_usable),
+            "pace": {"codex": provider_pace(codex, cfg), "claude": provider_pace(claude, cfg)},
             "signals": {
                 "daily_target": daily_target,
                 "announced": announced is not None,
@@ -1140,6 +1166,7 @@ def _cmd_status(now: datetime, cfg: Config, state_dir: Path, fetcher, out) -> in
             )
         else:
             out.write(f"{prov.name:<7} unknown: {prov.reason}\n")
+    out.write("pace       " + _pace_text({name: provider_pace(g.providers[name], cfg) for name in ("codex", "claude")}) + "\n")
     for src in (g.feed, g.forecast, g.lunar):
         if src.body is None:
             out.write(f"{src.name:<10} unavailable: {src.error}\n")
@@ -1191,6 +1218,7 @@ def _cmd_decide(args, now: datetime, cfg: Config, state_dir: Path, fetcher, out,
         out.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     else:
         out.write(result["worker"] + "\n")
+        err.write("pace: " + _pace_text(result["pace"]) + "\n")
     return exit_code
 
 

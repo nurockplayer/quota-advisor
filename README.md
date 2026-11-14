@@ -30,6 +30,10 @@ Codex is the default worker at every hour. Fresh watcher account state makes Cod
 
 DeepSeek is never selected during peak or for a task that would run into peak. Peak is Mon-Fri 10:00-13:00 and 15:00-19:00 Asia/Tokyo. Weekends are always off-peak. Wrap up a DeepSeek task at 10 minutes before a peak start (`next-peak` prints it).
 
+## Pace signal
+
+For each provider, the weekly target is `10 × sqrt(elapsed)` where elapsed is the percentage of the week elapsed. The gap is used percentage minus target. A gap at or below `-pace_band_pct` is behind, at or above `pace_band_pct` is ahead, and otherwise is on pace. The band defaults to 10 percentage points. Missing weekly figures produce an unknown pace. The signal appears in decision JSON, on stderr for plain decisions, and in `status`; it does not affect routing.
+
 ## Data sources
 
 - **Codex watcher account state**: `~/.local/state/codex-quota-watch/account.json`, configurable through `account_state_path`. A sample no older than `stale_minutes` (30 by default) controls usability. A null credit balance means credits are unknown: `ordinary_usage_allowed = true` still permits Codex, while false does not; the decision notes "credits unknown". Its `used_percent` and `resets_at` replace TokenBar weekly data when the watcher weekly sample is fresher; otherwise TokenBar weekly data wins. JSON output includes `codex.credits_balance` and `codex.usable_tickets` (null without fresh account state). Tickets are reported, not automatically redeemed. A missing, stale or unreadable file adds a note and falls back to TokenBar logic.
@@ -43,7 +47,7 @@ Credits and affiliation: reset announcements come from [codex-reset.com](https:/
 
 ## Files
 
-- Config (optional): `~/.config/quota-advisor/config.toml`. Keys: `daily_target_pct = 18.0`, `peak_fallback = "stop"` (`"stop"` or `"haiku"`), `account_state_path`, `codex_session_limit`, `claude_limit`, `stale_minutes`, `margin_minutes`, `wrapup_minutes`, `default_est_minutes = {hard = 150, routine = 60}`, `peak_windows = [["10:00", "13:00"], ["15:00", "19:00"]]`, `timezone`, `syrtis_path`, `feed_url`, `forecast_url`, `lunarwerx_url`. `prime_threshold` and `reset_tickets` are accepted for old configs, ignored, and named in deprecation notes. Other unknown keys are an error, as are non-finite numbers, percentages above 100, minute values above 10080 (one week), and invalid UTF-8 or TOML.
+- Config (optional): `~/.config/quota-advisor/config.toml`. Keys: `daily_target_pct = 18.0`, `pace_band_pct = 10.0`, `peak_fallback = "stop"` (`"stop"` or `"haiku"`), `account_state_path`, `codex_session_limit`, `claude_limit`, `stale_minutes`, `margin_minutes`, `wrapup_minutes`, `default_est_minutes = {hard = 150, routine = 60}`, `peak_windows = [["10:00", "13:00"], ["15:00", "19:00"]]`, `timezone`, `syrtis_path`, `feed_url`, `forecast_url`, `lunarwerx_url`. `prime_threshold` and `reset_tickets` are accepted for old configs, ignored, and named in deprecation notes. Other unknown keys are an error, as are non-finite numbers, percentages above 100, minute values above 10080 (one week), and invalid UTF-8 or TOML.
 - State (written by decisions and `done`): `~/.local/state/quota-advisor/decisions.log`, one JSON line per decision and per `done`, plus `cache/`.
 
 ## Tests
