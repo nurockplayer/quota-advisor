@@ -80,7 +80,7 @@ class DecisionOutputTests(CliTestCase):
         self.assertEqual(data["est_minutes"], 90)
         self.assertEqual(data["signals"]["est_source"], "--est")
         self.assertEqual(data["mode"], "CODEX")
-        self.assertEqual(data["signals"]["daily_target"], {"day": 1, "target_pct": 18.0})
+        self.assertNotIn("daily_target", data["signals"])
         self.assertNotIn("start_after", data)
 
     def test_routine_json_names_tier_and_worker(self) -> None:

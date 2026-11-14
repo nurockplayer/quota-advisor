@@ -78,7 +78,6 @@ class ConfigError(Exception):
 
 @dataclass(frozen=True)
 class Config:
-    daily_target_pct: float = 18.0
     pace_band_pct: float = 10.0
     peak_fallback: str = "stop"
     codex_session_limit: float = 95.0
@@ -108,7 +107,7 @@ def _parse_hhmm(text: Any) -> str:
 
 
 def config_from_dict(data: dict) -> Config:
-    deprecated = {"prime_threshold", "reset_tickets"}
+    deprecated = {"prime_threshold", "reset_tickets", "daily_target_pct"}
     known = {f.name for f in fields(Config)} - {"notes"} | deprecated
     unknown = sorted(set(data) - known)
     if unknown:
@@ -337,16 +336,15 @@ def provider_pace(provider: Provider, cfg: Config) -> Optional[dict]:
             "target_pct": round(target, 1), "gap_pct": round(gap, 1)}
 
 
+def _provider_pace_text(item: Optional[dict]) -> str:
+    if item is None:
+        return "unknown"
+    return (f"{item['state']} ({item['used_pct']:.0f}% used, target "
+            f"{item['target_pct']:.0f}% at {item['elapsed_pct']:.0f}% of the week)")
+
+
 def _pace_text(pace: dict) -> str:
-    parts = []
-    for name in ("codex", "claude"):
-        item = pace[name]
-        if item is None:
-            parts.append(f"{name} unknown")
-        else:
-            parts.append(f"{name} {item['state']} ({item['used_pct']:.0f}% used, target "
-                         f"{item['target_pct']:.0f}% at {item['elapsed_pct']:.0f}% of the week)")
-    return "; ".join(parts)
+    return "; ".join(f"{name} {_provider_pace_text(pace[name])}" for name in ("codex", "claude"))
 
 
 def _unknown_providers(reason: str) -> dict[str, Provider]:
@@ -929,11 +927,7 @@ def evaluate(
         f"Codex 5h {_pct(codex.session_used)}, weekly {_pct(codex.weekly_used)}"
     )
     announced = reset.live[0] if reset.live else None
-    daily_target = None
-    if codex.weekly_elapsed_pct is not None:
-        day = min(math.floor(codex.weekly_elapsed_pct * 7 / 100 + 1e-9) + 1, 7)
-        target = min(cfg.daily_target_pct * day, 100.0)
-        daily_target = {"day": day, "target_pct": target}
+    codex_pace = provider_pace(codex, cfg)
 
     if announced is not None and codex_usable:
         mode, worker = "BURN", codex_worker
@@ -943,18 +937,18 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
-    elif daily_target is not None and codex.weekly_used is not None and codex.weekly_used > target and deepseek_fits:
+    elif codex_pace is not None and codex_pace["state"] == "ahead" and deepseek_fits:
         mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
         primary = (
-            f"Weekly {_pct(codex.weekly_used)} exceeds today's target {target:g}%; off-peak, "
+            f"Codex is ahead of pace; off-peak, "
             f"and the task ({est_minutes} min, {est_source}) with margin ends "
             f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
         )
     elif codex_usable:
         mode, worker = "CODEX", codex_worker
         primary = f"Codex usable ({codex_state}), Codex is the default any hour."
-        if daily_target is not None:
-            primary += f" Day {day} of the Codex week: target {target:g}% ({cfg.daily_target_pct:g}% x day)."
+        if codex_pace is not None:
+            primary += f" Codex pace {_provider_pace_text(codex_pace)}."
     elif not codex.ok and codex.account_usable is None:
         mode, worker = "CODEX", codex_worker
         primary = "Codex quota unknown; Codex by default"
@@ -1003,9 +997,8 @@ def evaluate(
             "est_minutes": est_minutes,
             "codex": {**codex.as_dict(codex_usable), "credits_balance": codex.credits_balance, "usable_tickets": codex.usable_tickets},
             "claude": claude.as_dict(claude_usable),
-            "pace": {"codex": provider_pace(codex, cfg), "claude": provider_pace(claude, cfg)},
+            "pace": {"codex": codex_pace, "claude": provider_pace(claude, cfg)},
             "signals": {
-                "daily_target": daily_target,
                 "announced": announced is not None,
                 "announcement_at": iso(announced.at) if announced else None,
                 "announcement_source": announced.label if announced else None,
