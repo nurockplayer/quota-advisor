@@ -354,9 +354,11 @@ def provider_pace(provider: Provider, cfg: Config, now: datetime) -> Optional[di
         return None
     target = elapsed
     gap = used - target
-    state = "behind" if gap <= -cfg.pace_band_pct else "ahead" if gap >= cfg.pace_band_pct else "on"
+    # Claude's band narrows to the points left in the week, so a shortfall near the reset still reads behind.
+    band = cfg.pace_band_pct if clock == "weekdays" else min(cfg.pace_band_pct, 100 - elapsed)
+    state = "behind" if gap <= -band else "ahead" if gap >= band else "on"
     return {"state": state, "used_pct": round(used, 1), "elapsed_pct": round(elapsed, 1),
-            "target_pct": round(target, 1), "gap_pct": round(gap, 1), "clock": clock}
+            "target_pct": round(target, 1), "gap_pct": round(gap, 1), "band_pct": round(band, 1), "clock": clock}
 
 
 def _provider_pace_text(item: Optional[dict]) -> str:

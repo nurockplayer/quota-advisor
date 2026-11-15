@@ -92,6 +92,13 @@ class PaceTests(unittest.TestCase):
                          ("week", 84.4, -5.4, "on"))
         self.assertEqual(qa._provider_pace_text(claude),
                          "on (79% used, target 84% at 84% of the week, 1% per 101 min; 9.1 h behind)")
+        late = qa.provider_pace(qa.Provider("Claude", True, weekly_used=95, weekly_elapsed_pct=97), cfg, now)
+        self.assertEqual((late["band_pct"], late["state"]), (3, "on"))
+        late = qa.provider_pace(qa.Provider("Claude", True, weekly_used=90, weekly_elapsed_pct=99), cfg, now)
+        self.assertEqual((late["band_pct"], late["state"]), (1, "behind"))
+        late = qa.provider_pace(qa.Provider("Claude", True, weekly_used=100, weekly_elapsed_pct=98), cfg, now)
+        self.assertEqual(late["state"], "ahead")
+        self.assertEqual(pace["band_pct"], 10)
         early = qa.provider_pace(qa.Provider("Claude", True, weekly_used=30, weekly_elapsed_pct=10), cfg, now)
         self.assertEqual((early["target_pct"], early["state"]), (10, "ahead"))
         self.assertIn("33.6 h ahead", qa._provider_pace_text(early))
