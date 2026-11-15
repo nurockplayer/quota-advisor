@@ -352,7 +352,7 @@ def provider_pace(provider: Provider, cfg: Config, now: datetime) -> Optional[di
                else provider.weekly_elapsed_pct if clock == "week" else None)
     if used is None or elapsed is None:
         return None
-    target = elapsed if clock == "weekdays" else 10 * math.sqrt(elapsed)
+    target = elapsed
     gap = used - target
     state = "behind" if gap <= -cfg.pace_band_pct else "ahead" if gap >= cfg.pace_band_pct else "on"
     return {"state": state, "used_pct": round(used, 1), "elapsed_pct": round(elapsed, 1),
@@ -362,10 +362,14 @@ def provider_pace(provider: Provider, cfg: Config, now: datetime) -> Optional[di
 def _provider_pace_text(item: Optional[dict]) -> str:
     if item is None:
         return "unknown"
-    clock = "20% a weekday" if item["clock"] == "weekdays" else f"at {item['elapsed_pct']:.0f}% of the week"
-    separator = ": " if item["clock"] == "weekdays" else " "
-    return (f"{item['state']} ({item['used_pct']:.0f}% used, target "
-            f"{item['target_pct']:.0f}%{separator}{clock})")
+    if item["clock"] == "weekdays":
+        return (f"{item['state']} ({item['used_pct']:.0f}% used, target "
+                f"{item['target_pct']:.0f}%: 20% a weekday)")
+    # 1% of the week is 100.8 minutes, so the gap in points converts straight to hours.
+    hours = abs(item["gap_pct"]) * WEEKLY_SECONDS / 100 / 3600
+    side = "ahead" if item["gap_pct"] >= 0 else "behind"
+    return (f"{item['state']} ({item['used_pct']:.0f}% used, target {item['target_pct']:.0f}% at "
+            f"{item['elapsed_pct']:.0f}% of the week, 1% per 101 min; {hours:.1f} h {side})")
 
 
 def _pace_text(pace: dict) -> str:

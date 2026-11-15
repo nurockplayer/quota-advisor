@@ -32,7 +32,7 @@ DeepSeek is never selected during peak or for a task that would run into peak. P
 
 ## Pace signal
 
-Codex targets 20% of its weekly allowance per weekday, counting only weekday time in its seven-day window; weekends add no target because DeepSeek is off-peak all day. Claude targets `10 × sqrt(elapsed)`, where elapsed is the percentage of the calendar week elapsed. The gap is used percentage minus target. A gap at or below `-pace_band_pct` is behind, at or above `pace_band_pct` is ahead, and otherwise is on pace. The band defaults to 10 percentage points. Missing weekly figures produce an unknown pace. The signal appears in decision JSON, on stderr for plain decisions, and in `status`; DeepSeek is billed per use and takes work only when Codex is ahead of pace.
+Codex targets 20% of its weekly allowance per weekday, counting only weekday time in its seven-day window; weekends add no target because DeepSeek is off-peak all day. Claude targets a straight line: the percentage of its seven-day window elapsed (1% per 100.8 minutes), and the pace text gives the gap in hours. The gap is used percentage minus target. A gap at or below `-pace_band_pct` is behind, at or above `pace_band_pct` is ahead, and otherwise is on pace. The band defaults to 10 percentage points. Missing weekly figures produce an unknown pace. The signal appears in decision JSON, on stderr for plain decisions, and in `status`; DeepSeek is billed per use and takes work only when Codex is ahead of pace.
 
 ## Data sources
 

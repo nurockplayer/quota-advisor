@@ -88,8 +88,13 @@ class PaceTests(unittest.TestCase):
         self.assertEqual((pace["gap_pct"], pace["state"]), (-29.9, "behind"))
         self.assertEqual(qa._provider_pace_text(pace), "behind (27% used, target 57%: 20% a weekday)")
         claude = qa.provider_pace(qa.Provider("Claude", True, weekly_used=79, weekly_elapsed_pct=84.4), cfg, now)
-        self.assertEqual((claude["clock"], claude["target_pct"]), ("week", 91.9))
-        self.assertIn("target 92% at 84% of the week", qa._provider_pace_text(claude))
+        self.assertEqual((claude["clock"], claude["target_pct"], claude["gap_pct"], claude["state"]),
+                         ("week", 84.4, -5.4, "on"))
+        self.assertEqual(qa._provider_pace_text(claude),
+                         "on (79% used, target 84% at 84% of the week, 1% per 101 min; 9.1 h behind)")
+        early = qa.provider_pace(qa.Provider("Claude", True, weekly_used=30, weekly_elapsed_pct=10), cfg, now)
+        self.assertEqual((early["target_pct"], early["state"]), (10, "ahead"))
+        self.assertIn("33.6 h ahead", qa._provider_pace_text(early))
         self.assertIsNone(qa.provider_pace(qa.Provider("Codex", True, weekly_used=27), cfg, now))
 
     def test_aligned_week_and_band(self) -> None:
