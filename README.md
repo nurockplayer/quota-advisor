@@ -53,7 +53,7 @@ Credits and affiliation: reset announcements come from [codex-reset.com](https:/
 ## Tests
 
 ```
-orb-test -- python3 -m unittest discover -s tests
+tachi-run -- python3 -m unittest discover -s tests
 ```
 
 Tests use a fixed clock, fixture data and a fake fetcher. They never touch the network or the real home directory.
