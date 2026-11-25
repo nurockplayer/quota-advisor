@@ -28,6 +28,16 @@ class DeepSeekPauseTests(test_cli.CliTestCase):
                 self.assertTrue(data["signals"]["deepseek_fits"])
                 self.assertEqual((data["worker"], data["mode"]), ("codex", "CODEX"))
 
+    def test_ahead_off_peak_with_exhausted_codex_uses_fallback(self):
+        for claude_session, worker, mode in ((13, "haiku", "FALLBACK"), (100, "none", "WAIT")):
+            with self.subTest(worker=worker):
+                data = self.decide("routine", codex_weekly=85, codex_session=100,
+                                   claude_session=claude_session)
+                self.assertEqual(data["pace"]["codex"]["state"], "ahead")
+                self.assertTrue(data["signals"]["deepseek_fits"])
+                self.assertFalse(data["codex"]["usable"])
+                self.assertEqual((data["worker"], data["mode"]), (worker, mode))
+
     def test_other_routes_are_unchanged(self):
         for worker, mode, quota in (
             ("codex", "CODEX", {}),

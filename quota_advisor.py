@@ -972,17 +972,13 @@ def evaluate(
         )
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
-    elif codex_pace is not None and codex_pace["state"] == "ahead" and deepseek_fits:
+    elif DEEPSEEK_ROUTING_ENABLED and codex_pace is not None and codex_pace["state"] == "ahead" and deepseek_fits:
+        mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
         primary = (
             f"Codex pace {_provider_pace_text(codex_pace)}; off-peak, "
             f"and the task ({est_minutes} min, {est_source}) with margin ends "
             f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
         )
-        if DEEPSEEK_ROUTING_ENABLED:
-            mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
-        else:
-            mode, worker = "CODEX", codex_worker
-            primary = f"DeepSeek routing paused (Owner 2026-11-26). {primary}"
     elif codex_usable:
         mode, worker = "CODEX", codex_worker
         primary = f"Codex usable ({codex_state}), Codex is the default any hour."
