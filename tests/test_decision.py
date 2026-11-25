@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from support import (
     FIXTURE_NOW,
@@ -143,6 +144,7 @@ class RealFixtureTests(DecisionTestCase):
 
 
 class TargetTests(DecisionTestCase):
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_pace_drives_offpeak_routing(self) -> None:
         now = datetime(2026, 11, 14, 4, 57, tzinfo=UTC)
         reset = datetime(2026, 11, 17, 18, 40, tzinfo=UTC)
@@ -153,6 +155,7 @@ class TargetTests(DecisionTestCase):
                     doc=syrtis_doc(now, codex_weekly=used, weekly_reset_days=(reset - now).total_seconds() / 86400))
                 self.assertEqual((result["worker"], result["pace"]["codex"]["state"]), (worker, state))
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_ahead_requires_fit_and_custom_band(self) -> None:
         for now, est, used, extra, worker in ((WED_1100_JST, 50, 60, "", "codex"),
                                                (WED_1330_JST, 61, 60, "", "codex"),
@@ -180,6 +183,7 @@ class TargetTests(DecisionTestCase):
 
 
 class CodexDefaultTests(DecisionTestCase):
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_over_target_diverts_only_when_off_peak_and_task_fits(self) -> None:
         for now, est, used, mode in (
             (WED_1330_JST, 50, 35, "OFFPEAK_DEEPSEEK"),
@@ -208,6 +212,7 @@ class AccountStateTests(DecisionTestCase):
         data.update(overrides)
         return write_json(self.dir / "account.json", data)
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_credits_keep_codex_usable_after_weekly_exhaustion(self) -> None:
         for now, mode, worker in (
             (WED_1100_JST, "CODEX", "codex"),
@@ -295,6 +300,7 @@ class AccountStateTests(DecisionTestCase):
         self.assertEqual((result["mode"], result["worker"]), ("CODEX", "codex"))
         self.assertTrue(result["codex"]["ok"])
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_fresher_weekly_sample_wins(self) -> None:
         now = WED_1330_JST
         for account_age, weekly_age, session_age, expected in (
@@ -309,6 +315,7 @@ class AccountStateTests(DecisionTestCase):
                 self.assertEqual(result["codex"]["weekly_used"], expected)
                 self.assertEqual(result["worker"], "deepseek" if expected == 35 else "codex")
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_weekly_source_freshness_is_independent_of_missing_session(self) -> None:
         now = WED_1330_JST
         for account_age, expected_used, mode, worker in (
@@ -352,6 +359,7 @@ class AccountStateTests(DecisionTestCase):
                 self.assertIsNone(result["codex"]["usable_tickets"])
                 self.assertIn("using TokenBar logic", result["reason"])
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_unknown_quota_defaults_to_codex_instead_of_using_stale_weekly_pace(self) -> None:
         now = WED_1330_JST
         for age, mode, worker in ((45, "CODEX", "codex"), (0, "OFFPEAK_DEEPSEEK", "deepseek")):
@@ -392,6 +400,7 @@ class AccountStateTests(DecisionTestCase):
                 self.assertEqual((result["mode"], result["worker"]), ("WAIT", "none"))
                 self.assertEqual(result["start_after"], qa.iso(now + timedelta(hours=retry_in)))
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_burn_precedes_offpeak_deepseek_with_credits(self) -> None:
         now = FIXTURE_NOW
         self.account(now)
@@ -411,6 +420,7 @@ class PeakFallbackTests(DecisionTestCase):
             with self.subTest(value=value), self.assertRaises(qa.ConfigError):
                 qa.config_from_dict({"peak_fallback": value})
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_peak_and_overlap_never_select_deepseek(self) -> None:
         for now, est in ((WED_1100_JST, 30), (WED_1330_JST, 120)):
             for policy in ("stop", "haiku"):
@@ -448,6 +458,7 @@ class PeakFallbackTests(DecisionTestCase):
 
 
 class DeprecatedConfigTests(DecisionTestCase):
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_old_config_loads_with_notes_and_does_not_change_routing(self) -> None:
         cfg = qa.config_from_dict({"prime_threshold": 35, "reset_tickets": 1})
         self.assertFalse(hasattr(cfg, "prime_threshold"))
@@ -517,12 +528,14 @@ class BurnTests(DecisionTestCase):
 
 
 class SaveTests(DecisionTestCase):
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_off_peak_fitting_task_goes_to_deepseek(self) -> None:
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, doc=syrtis_doc(WED_1330_JST, codex_weekly=85))
         self.assertEqual(result["mode"], "OFFPEAK_DEEPSEEK")
         self.assertEqual(result["worker"], "deepseek")
         self.assertTrue(result["signals"]["deepseek_fits"])
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_fit_boundary_is_inclusive(self) -> None:
         # Wed 13:30 JST + 60 min + 30 min margin = 15:00, exactly the peak start.
         doc = syrtis_doc(WED_1330_JST, codex_weekly=85)
@@ -582,6 +595,7 @@ class SaveTests(DecisionTestCase):
         # Next off-peak start after Wed 11:00 JST is 13:00 JST.
         self.assertEqual(result["start_after"], qa.iso(datetime(2026, 10, 28, 4, 0, tzinfo=UTC)))
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_weekend_is_always_off_peak(self) -> None:
         result = self.decide(SAT_1100_JST, fixture_payloads(SAT_1100_JST), est=300, doc=syrtis_doc(SAT_1100_JST, codex_weekly=85))
         self.assertFalse(result["signals"]["in_peak"])
@@ -589,6 +603,7 @@ class SaveTests(DecisionTestCase):
         self.assertTrue(result["signals"]["deepseek_fits"])
         self.assertNotIn("start_after", result)
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_peak_window_check_on_weekday_at_0950(self) -> None:
         # Mon 09:50 JST: off-peak, but the 300-minute task cannot finish before the 10:00 peak.
         now = datetime(2026, 10, 26, 0, 50, tzinfo=UTC)
@@ -730,11 +745,13 @@ class ConfigTests(DecisionTestCase):
         self.assertEqual(result["mode"], "CODEX")
         self.assertIn("prime_threshold is deprecated and ignored", result["reason"])
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_margin_override_changes_fit(self) -> None:
         # With a 120-minute margin, 13:30 + 60 + 120 runs past the 15:00 peak.
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, extra="margin_minutes = 120", doc=syrtis_doc(WED_1330_JST, codex_weekly=40))
         self.assertNotEqual(result["worker"], "deepseek")
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_peak_window_override(self) -> None:
         # Only 10:00-12:00 is peak, so Wed 13:30 JST is off-peak with a long runway.
         result = self.decide(WED_1330_JST, fixture_payloads(WED_1330_JST), est=60, extra='peak_windows = [["10:00", "12:00"]]', doc=syrtis_doc(WED_1330_JST, codex_weekly=85))
@@ -820,6 +837,7 @@ class BoundaryTests(DecisionTestCase):
         doc_kwargs.setdefault("codex_weekly", 85)
         return self.decide(now, fixture_payloads(now), tier=tier, est=est, doc=syrtis_doc(now, **doc_kwargs))
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_friday_1900_rolls_to_off_peak_and_weekend_runway(self) -> None:
         now = datetime(2026, 10, 23, 10, 0, tzinfo=UTC)  # Fri 19:00 JST
         result = self.at(now)
@@ -849,6 +867,7 @@ class BoundaryTests(DecisionTestCase):
         self.assertFalse(result["signals"]["deepseek_fits"])
         self.assertEqual(result["worker"], "codex")
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_wednesday_1300_is_off_peak_and_fits_until_1500(self) -> None:
         now = datetime(2026, 10, 28, 4, 0, tzinfo=UTC)  # Wed 13:00 JST
         result = self.at(now)
@@ -1071,6 +1090,7 @@ class AnnouncementShapeTests(DecisionTestCase):
 
 
 class ReviewRound2Tests(DecisionTestCase):
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_unsorted_peak_windows_are_sorted_and_next_peak_is_correct(self) -> None:
         now = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)  # Wed 09:00 JST, off-peak
         extra = 'peak_windows = [["15:00", "19:00"], ["10:00", "13:00"]]'
@@ -1251,6 +1271,7 @@ class ReviewRound3Tests(DecisionTestCase):
                 self.assertNotEqual(result["worker"], "haiku")
                 self.assertFalse(result["claude"]["usable"])
 
+    @patch.object(qa, "DEEPSEEK_ROUTING_ENABLED", True)
     def test_wrap_up_must_also_clear_the_estimate(self) -> None:
         # Wed 09:00 JST, margin 0: 09:00 + 59 min runs past the 09:50 wrap-up.
         now = datetime(2026, 10, 28, 0, 0, tzinfo=UTC)
