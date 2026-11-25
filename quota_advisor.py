@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""quota-advisor: pick a worker (codex, deepseek, haiku) or queue the task (none).
+"""quota-advisor: pick a worker or queue the task (none).
 
 Standard library only. The decision rules are in docs/brief.md and README.md.
 """
@@ -47,6 +47,7 @@ TEASE_LABEL = "inferred tease (codex-reset)"
 MIN_ACTUALS = 3
 TIERS = ("hard", "routine")
 WORKER_FOR_TIER = {"hard": "codex", "routine": "codex"}
+DEEPSEEK_ROUTING_ENABLED = False  # Paused to use Codex reset tickets (Owner 2026-11-26).
 PEAK_WEEKDAYS = frozenset(range(5))  # Monday..Friday
 ANNOUNCEMENT_TIME_KEYS = ("at", "announced_at", "time", "source_at", "effective_at", "start")
 
@@ -972,12 +973,16 @@ def evaluate(
         if announced.label == TEASE_LABEL:
             primary += " Basis: inferred tease (codex-reset), treated as an announcement."
     elif codex_pace is not None and codex_pace["state"] == "ahead" and deepseek_fits:
-        mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
         primary = (
             f"Codex pace {_provider_pace_text(codex_pace)}; off-peak, "
             f"and the task ({est_minutes} min, {est_source}) with margin ends "
             f"{local_fmt(task_end, cfg)}, before the next peak at {local_fmt(peak_start, cfg)}."
         )
+        if DEEPSEEK_ROUTING_ENABLED:
+            mode, worker = "OFFPEAK_DEEPSEEK", "deepseek"
+        else:
+            mode, worker = "CODEX", codex_worker
+            primary = f"DeepSeek routing paused (Owner 2026-11-26). {primary}"
     elif codex_usable:
         mode, worker = "CODEX", codex_worker
         primary = f"Codex usable ({codex_state}), Codex is the default any hour."
@@ -1147,9 +1152,10 @@ def resolve_est(
 
 
 def build_parser() -> argparse.ArgumentParser:
+    workers = "codex, deepseek, haiku" if DEEPSEEK_ROUTING_ENABLED else "codex, haiku"
     parser = argparse.ArgumentParser(
         prog="quota-advisor",
-        description="Pick a worker (codex, deepseek, haiku) or return none to queue the task.",
+        description=f"Pick a worker ({workers}) or return none to queue the task.",
     )
     parser.add_argument("--tier", choices=TIERS, help="task tier (required for a decision)")
     parser.add_argument("--est", metavar="DURATION", type=parse_est, help="estimate, e.g. 90m, 2h")
